@@ -11,6 +11,8 @@ import json
 from werkzeug.utils import secure_filename
 from moviepy.editor import VideoFileClip
 import threading
+import re
+import requests
 
 # Load environment variables
 load_dotenv()
@@ -338,6 +340,82 @@ def serve_static(path):
 def api_root():
     """API root endpoint"""
     return jsonify({"message": "Video to Course Generator API"})
+
+@app.route('/images', methods=['GET'])
+def list_images():
+    """List available static images to be used as scene backgrounds"""
+    images_dir = os.path.join(app.static_folder, 'images')
+    try:
+        files = []
+        if os.path.isdir(images_dir):
+            for name in sorted(os.listdir(images_dir)):
+                if name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif')):
+                    files.append(f"/images/{name}")
+        return jsonify({"images": files})
+    except Exception as e:
+        logger.error(f"Error listing images: {e}")
+        return jsonify({"error": "Failed to list images"}), 500
+
+def duckduckgo_search(query: str, max_results: int = 5):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get("https://duckduckgo.com/html/", params={"q": query}, headers=headers, timeout=10)
+        resp.raise_for_status()
+        html = resp.text
+        # Very simple extraction of results
+        links = re.findall(r'<a[^>]+class="result__a"[^>]+href="(.*?)"[^>]*>(.*?)</a>', html)
+        results = []
+        for href, title_html in links[:max_results]:
+            # Clean title text
+            title = re.sub('<[^<]+?>', '', title_html)
+            results.append({"url": href, "title": title})
+        return results
+    except Exception as e:
+        logger.warning(f"Search error: {e}")
+        return []
+
+@app.route('/augment', methods=['POST'])
+def augment_content():
+    """Augment content using internet sources + OpenAI to generate helpful blocks."""
+    try:
+        data = request.get_json(silent=True) or {}
+        query = (data.get('query') or '').strip()
+        context = (data.get('context') or '').strip()
+        if not query:
+            return jsonify({"error": "Missing query"}), 400
+
+        sources = duckduckgo_search(query, max_results=5)
+        sources_snippet = "\n".join([f"- {s.get('title')}: {s.get('url')}" for s in sources])
+
+        prompt = f"""
+You are an expert course copilot helping authors enrich sections with web-sourced explanations and references.
+Task: Provide a concise, accurate augmentation that expands on the user's query, grounded in the following context (may be empty). Include explanations, key points, and actionable steps.
+
+Context:\n{context[:4000]}
+
+Query:\n{query}
+
+Sources (web results):\n{sources_snippet}
+
+Return a helpful markdown-style explanation (no code fences), followed by a short list of 2-4 bullet recommendations.
+"""
+
+        completion = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You produce concise, accurate learning augmentations."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        augmentation_text = completion.choices[0].message['content']
+
+        return jsonify({
+            "augmentation": augmentation_text,
+            "sources": sources
+        })
+    except Exception as e:
+        logger.error(f"Augment error: {e}")
+        return jsonify({"error": "Augmentation failed"}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, debug=True)

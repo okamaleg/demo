@@ -661,9 +661,26 @@
                 if (hasScenes) {
                     // Mount Dual Course Player to enable Scenes/Blocks switch
                     if (typeof mountDualCoursePlayer === 'function') {
-                        mountDualCoursePlayer(course, 'coursePlayerContainer', saveCourse, { role: 'author', view: 'scene' });
+                        mountDualCoursePlayer(
+                            course,
+                            'coursePlayerContainer',
+                            (updatedCourse) => {
+                                // keep currentCourse in sync and persist with correct id
+                                currentCourse = updatedCourse;
+                                saveCourse(currentCourseId, updatedCourse);
+                            },
+                            { role: 'author', view: 'scene' }
+                        );
                     } else {
-                        mountCoursePlayer(course, 'coursePlayerContainer', saveCourse, { role: 'author' });
+                        mountCoursePlayer(
+                            course,
+                            'coursePlayerContainer',
+                            (updatedCourse) => {
+                                currentCourse = updatedCourse;
+                                saveCourse(currentCourseId, updatedCourse);
+                            },
+                            { role: 'author' }
+                        );
                     }
                     courseSections.style.display = 'none'; // Hide traditional display
                 } else {

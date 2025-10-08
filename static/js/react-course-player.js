@@ -36,6 +36,9 @@ class CoursePlayer extends React.Component {
     this.voices = [];
     this.selectedVoice = null;
     this.currentUtterance = null;
+    // Image mapping
+    this.sceneImageMap = []; // array of Image objects aligned to flattened scenes
+    this.sceneImageUrls = [];
   }
 
   componentDidMount() {
@@ -50,6 +53,8 @@ class CoursePlayer extends React.Component {
       loadVoices();
       window.speechSynthesis.onvoiceschanged = loadVoices;
     }
+    // Fetch available images and preload
+    this.fetchAndMapImages();
   }
 
   componentDidUpdate(prevProps, prevState) {
@@ -69,6 +74,42 @@ class CoursePlayer extends React.Component {
     if (prevState.videoMode !== this.state.videoMode && this.state.videoMode) {
       this.startVideoPlayback();
     }
+    // Re-map images if course changes
+    if (prevProps.course !== this.props.course) {
+      this.fetchAndMapImages();
+    }
+  }
+
+  async fetchAndMapImages() {
+    try {
+      const resp = await fetch('/images');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const urls = Array.isArray(data.images) ? data.images : [];
+      this.sceneImageUrls = urls;
+      // Preload images
+      const loaded = await Promise.all(urls.map(u => new Promise(resolve => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => resolve(null);
+        img.src = u;
+      })));
+      // Map sequentially across content scenes (ignore quiz sections)
+      const map = [];
+      let idx = 0;
+      const course = this.props.course;
+      if (course && Array.isArray(course.sections)) {
+        course.sections.forEach(section => {
+          if (Array.isArray(section.scenes)) {
+            section.scenes.forEach(() => {
+              map.push(loaded[idx] || null);
+              if (idx < loaded.length - 1) idx++;
+            });
+          }
+        });
+      }
+      this.sceneImageMap = map;
+    } catch (_) {}
   }
 
   componentWillUnmount() {
@@ -751,12 +792,31 @@ class CoursePlayer extends React.Component {
       // Get scene type colors
       const bgColors = this.getBackgroundColorsForScene(scene.scene_type);
       
-      // Draw background gradient
+    // Draw image background if mapped for this scene; otherwise gradient
+    const flatIndex = this.getFlatSceneIndex(sectionIndex, sceneIndex);
+    const bgImg = this.sceneImageMap[flatIndex];
+    if (bgImg) {
+      // cover strategy
+      const imgRatio = bgImg.width / bgImg.height;
+      const canvasRatio = width / height;
+      let drawW, drawH;
+      if (imgRatio > canvasRatio) {
+        drawH = height;
+        drawW = imgRatio * drawH;
+      } else {
+        drawW = width;
+        drawH = drawW / imgRatio;
+      }
+      const dx = (width - drawW) / 2;
+      const dy = (height - drawH) / 2;
+      ctx.drawImage(bgImg, dx, dy, drawW, drawH);
+    } else {
       const gradient = ctx.createLinearGradient(0, 0, width, height);
       gradient.addColorStop(0, bgColors[0]);
       gradient.addColorStop(1, bgColors[1]);
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, width, height);
+    }
       
       // Apply animation effects
       switch (animationType) {
@@ -832,6 +892,23 @@ class CoursePlayer extends React.Component {
     };
     
     this.videoAnimationRef = requestAnimationFrame(animate);
+  }
+
+  getFlatSceneIndex(sectionIndex, sceneIndex) {
+    const course = this.props.course;
+    if (!course || !Array.isArray(course.sections)) return 0;
+    let count = 0;
+    for (let i = 0; i < course.sections.length; i++) {
+      const sec = course.sections[i];
+      if (!Array.isArray(sec.scenes)) continue;
+      if (i < sectionIndex) {
+        count += sec.scenes.length;
+      } else if (i === sectionIndex) {
+        count += sceneIndex;
+        break;
+      }
+    }
+    return count;
   }
 
   startVoiceOver(scene) {
