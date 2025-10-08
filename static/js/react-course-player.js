@@ -9,6 +9,7 @@ class CoursePlayer extends React.Component {
       isPlaying: false,
       progress: 0,
       mode: 'view', // 'view' or 'edit' or 'video'
+      role: props.role || 'learner', // 'author' | 'learner'
       selectedScene: null,
       isEditorOpen: false,
       sceneToEdit: null,
@@ -1111,17 +1112,35 @@ class CoursePlayer extends React.Component {
     
     return (
       <div className="course-player">
+        {/* Role Toggle */}
+        <div className="flex items-center justify-end mb-2">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600">View as:</span>
+            <div className="inline-flex rounded border border-gray-300 overflow-hidden">
+              <button
+                className={`px-3 py-1 text-sm ${this.state.role === 'learner' ? 'bg-blue-500 text-white' : 'bg-white text-gray-700'}`}
+                onClick={() => this.setState({ role: 'learner' }, () => this.drawCurrentScene())}
+              >Learner</button>
+              <button
+                className={`px-3 py-1 text-sm ${this.state.role === 'author' ? 'bg-blue-500 text-white' : 'bg-white text-gray-700'}`}
+                onClick={() => this.setState({ role: 'author' }, () => this.drawCurrentScene())}
+              >Author</button>
+            </div>
+          </div>
+        </div>
         <div className="player-header mb-4">
           <h2 className="text-2xl font-bold">{course.title}</h2>
           <p className="text-gray-600">{course.description}</p>
           
           <div className="flex mt-4 gap-2">
-            <button 
-              onClick={this.toggleVideoMode}
-              className={`px-4 py-2 rounded ${videoMode ? 'bg-red-500 text-white' : 'bg-blue-500 text-white'}`}
-            >
-              {videoMode ? 'Exit Video Mode' : 'Play as Video'}
-            </button>
+            {this.state.role === 'learner' && (
+              <button 
+                onClick={this.toggleVideoMode}
+                className={`px-4 py-2 rounded ${videoMode ? 'bg-red-500 text-white' : 'bg-blue-500 text-white'}`}
+              >
+                {videoMode ? 'Exit Video Mode' : 'Play as Video'}
+              </button>
+            )}
           </div>
         </div>
         
@@ -1213,15 +1232,17 @@ class CoursePlayer extends React.Component {
                       </svg>
                     </button>
                     
-                    <button
-                      onClick={this.editCurrentScene}
-                      className="bg-green-600 hover:bg-green-700 text-white p-2 rounded-full transition-colors"
-                      title="Edit Scene"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
-                      </svg>
-                    </button>
+                    {this.state.role === 'author' && (
+                      <button
+                        onClick={this.editCurrentScene}
+                        className="bg-green-600 hover:bg-green-700 text-white p-2 rounded-full transition-colors"
+                        title="Edit Scene"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
+                        </svg>
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1307,17 +1328,19 @@ class CoursePlayer extends React.Component {
                                   }`}></div>
                                   <span className="text-sm">Scene {sceneIdx + 1}: {scene.scene_type || 'Content'}</span>
                                 </div>
-                                <button 
-                                  className="text-blue-500 hover:text-blue-700 p-1"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    this.openSceneEditor(scene, sectionIdx, sceneIdx);
-                                  }}
-                                >
-                                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
-                                  </svg>
-                                </button>
+                                {this.state.role === 'author' && (
+                                  <button 
+                                    className="text-blue-500 hover:text-blue-700 p-1"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      this.openSceneEditor(scene, sectionIdx, sceneIdx);
+                                    }}
+                                  >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
+                                    </svg>
+                                  </button>
+                                )}
                               </div>
                             </div>
                           ))}
@@ -1350,13 +1373,14 @@ class CoursePlayer extends React.Component {
 }
 
 // Helper function to mount the React component
-function mountCoursePlayer(courseData, containerId, onCourseUpdate) {
+function mountCoursePlayer(courseData, containerId, onCourseUpdate, options) {
   const container = document.getElementById(containerId);
   if (container && courseData) {
     ReactDOM.render(
       React.createElement(CoursePlayer, { 
         course: courseData,
-        onCourseUpdate: onCourseUpdate 
+        onCourseUpdate: onCourseUpdate,
+        role: options && options.role ? options.role : 'learner'
       }),
       container
     );

@@ -102,7 +102,7 @@ def generate_course(transcript, video_title):
                 - One correct answer
                 - Explanations for why the correct answer is right
                 
-                Format your response as valid JSON with the following structure:
+                Format your response as valid JSON with the following structure. In addition to scenes, also include an optional block-based representation for each content section to support a different player mode:
                 {
                     "title": "Course Title",
                     "description": "Course description",
@@ -143,6 +143,14 @@ def generate_course(transcript, video_title):
                                     ]
                                 }
                             ],
+                            "blocks": [
+                                { "type": "text", "content": "Short paragraph" },
+                                { "type": "image", "url": "optional-or-description", "alt": "desc" },
+                                { "type": "video", "source": "from uploaded video or url", "timestamp": 12 },
+                                { "type": "doc", "url": "document url or summary", "title": "Doc title" },
+                                { "type": "flipcard", "front": "term", "back": "definition" },
+                                { "type": "checklist", "items": [ { "text": "Step 1" }, { "text": "Step 2" } ] }
+                            ],
                             "questions": [
                                 {
                                     "question": "Question text here",
@@ -172,6 +180,7 @@ def generate_course(transcript, video_title):
                 - Make sure each scene has a clear purpose and communicates effectively
                 - Use a variety of visual elements to maintain engagement
                 - Keep the scenes focused and not overcrowded with too many elements
+                - When creating blocks, choose a mix of types (image, video, doc, flipcard, checklist) that best convey the section's key points. Keep blocks concise and self-contained.
                 - For quiz sections: set "type": "quiz" and include relevant questions
                 - For content sections: set "type": "content" and focus on scenes
                 - Add quiz sections after every 2-3 content sections
