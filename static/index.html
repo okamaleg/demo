@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video to Course Generator</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <!-- React and ReactDOM -->
+    <script src="https://unpkg.com/react@17/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js"></script>
+    <!-- Babel for JSX support -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Tailwind CSS for better styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+            background-color: #f8f9fa;
+        }
+        .loading {
+            display: none;
+        }
+        .course-section {
+            margin-bottom: 1.5rem;
+            padding: 1rem;
+            border-radius: 0.25rem;
+            background-color: #f8f9fa;
+        }
+        .scene-card {
+            margin-bottom: 1rem;
+            border-left: 4px solid #6c757d;
+        }
+        .scene-introduction {
+            border-left-color: #0d6efd;
+        }
+        .scene-content {
+            border-left-color: #198754;
+        }
+        .scene-summary {
+            border-left-color: #dc3545;
+        }
+        .visual-element {
+            padding: 0.5rem;
+            margin-bottom: 0.5rem;
+            border-radius: 0.25rem;
+            background-color: #f1f1f1;
+        }
+        .element-avatar {
+            background-color: #e6f7ff;
+        }
+        .element-image {
+            background-color: #f0f7ed;
+        }
+        .element-text {
+            background-color: #fff9e6;
+        }
+        .element-shape {
+            background-color: #f7e6ff;
+        }
+        #uploadForm {
+            margin-bottom: 2rem;
+        }
+        #statusArea, #courseArea {
+            display: none;
+        }
+        .section-toggle {
+            cursor: pointer;
+        }
+        .player-canvas-container {
+            aspect-ratio: 16 / 9;
+            position: relative;
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-4">Video to Course Generator</h1>
+        
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">Upload a Video</h5>
+                <form id="uploadForm">
+                    <div class="mb-3">
+                        <label for="videoFile" class="form-label">Video File</label>
+                        <input type="file" class="form-control" id="videoFile" accept="video/*" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="videoTitle" class="form-label">Title (Optional)</label>
+                        <input type="text" class="form-control" id="videoTitle" placeholder="Enter a title for your video">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Upload & Process</button>
+                    <div class="loading mt-3">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <span class="ms-2">Uploading video...</span>
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        <div id="statusArea" class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">Processing Status</h5>
+                <div class="alert alert-info">
+                    <div id="statusMessage">Processing your video...</div>
+                    <div class="progress mt-2">
+                        <div id="statusProgress" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+                    </div>
+                </div>
+                <button id="checkStatusBtn" class="btn btn-secondary">Check Status</button>
+            </div>
+        </div>
+        
+        <div id="courseArea" class="card">
+            <div class="card-body">
+                <h5 class="card-title">Generated Course</h5>
+                <div id="courseContent">
+                    <h2 id="courseTitle" class="mb-3"></h2>
+                    <p id="courseDescription" class="lead mb-4"></p>
+                    
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <h5>Course Metadata</h5>
+                        </div>
+                        <div class="card">
+                            <div class="card-body" id="courseMetadata">
+                                <!-- Metadata will be inserted here -->
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- React Course Player will be mounted here -->
+                    <div id="coursePlayerContainer" class="mt-4"></div>
+                    
+                    <!-- Traditional course sections (as fallback) -->
+                    <div id="courseSections" class="mt-4">
+                        <!-- Sections will be inserted here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Load the Scene Editor -->
+    <script src="/js/scene-editor.js" type="text/babel"></script>
+    <script src="/js/quiz-component.js" type="text/babel"></script>
+    
+    <!-- Load the React Course Player -->
+    <script src="/js/react-course-player.js" type="text/babel"></script>
+    
+    <script>
+        // Global variables
+        let currentVideoId = null;
+        let statusCheckInterval = null;
+        let currentCourse = null;
+
+        // DOM elements
+        const uploadForm = document.getElementById('uploadForm');
+        const loadingIndicator = document.querySelector('.loading');
+        const statusArea = document.getElementById('statusArea');
+        const statusMessage = document.getElementById('statusMessage');
+        const statusProgress = document.getElementById('statusProgress');
+        const checkStatusBtn = document.getElementById('checkStatusBtn');
+        const courseArea = document.getElementById('courseArea');
+        const courseTitle = document.getElementById('courseTitle');
+        const courseDescription = document.getElementById('courseDescription');
+        const courseMetadata = document.getElementById('courseMetadata');
+        const courseSections = document.getElementById('courseSections');
+
+        // Handle form submission
+        uploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const videoFile = document.getElementById('videoFile').files[0];
+            const videoTitle = document.getElementById('videoTitle').value;
+            
+            if (!videoFile) {
+                alert('Please select a video file');
+                return;
+            }
+            
+            // Show loading indicator
+            loadingIndicator.style.display = 'block';
+            
+            // Create form data
+            const formData = new FormData();
+            formData.append('file', videoFile);
+            if (videoTitle) {
+                formData.append('title', videoTitle);
+            }
+            
+            try {
+                // Upload video
+                const response = await fetch('/upload-video/', {
+                    method: 'POST',
+                    body: formData,
+                    // No need to set Content-Type header, the browser will set it automatically with the boundary
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Upload failed: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                currentVideoId = data.video_id;
+                
+                // Hide loading indicator and show status area
+                loadingIndicator.style.display = 'none';
+                statusArea.style.display = 'block';
+                
+                // Update status message
+                statusMessage.textContent = `Processing video: ${data.status}`;
+                updateProgressBar(25);
+                
+                // Start checking status
+                startStatusCheck();
+                
+            } catch (error) {
+                loadingIndicator.style.display = 'none';
+                alert(`Error: ${error.message}`);
+                console.error(error);
+            }
+        });
+
+        // Check status button handler
+        checkStatusBtn.addEventListener('click', () => {
+            if (currentVideoId) {
+                checkVideoStatus(currentVideoId);
+            }
+        });
+
+        // Start periodic status checking
+        function startStatusCheck() {
+            // Clear any existing interval
+            if (statusCheckInterval) {
+                clearInterval(statusCheckInterval);
+            }
+            
+            // Check immediately
+            checkVideoStatus(currentVideoId);
+            
+            // Then check every 5 seconds
+            statusCheckInterval = setInterval(() => {
+                checkVideoStatus(currentVideoId);
+            }, 5000);
+        }
+
+        // Check video processing status
+        async function checkVideoStatus(videoId) {
+            try {
+                const response = await fetch(`/video/${videoId}`);
+                
+                if (!response.ok) {
+                    throw new Error(`Status check failed: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                // Update status message
+                statusMessage.textContent = `Status: ${data.status}`;
+                
+                // Update progress bar based on status
+                switch (data.status) {
+                    case 'uploaded':
+                        updateProgressBar(25);
+                        break;
+                    case 'processing':
+                        updateProgressBar(50);
+                        break;
+                    case 'transcript_extracted':
+                        updateProgressBar(75);
+                        break;
+                    case 'completed':
+                        updateProgressBar(100);
+                        clearInterval(statusCheckInterval);
+                        
+                        // Get and display the course
+                        if (data.course_id) {
+                            getCourse(data.course_id);
+                        }
+                        break;
+                    case 'error':
+                        clearInterval(statusCheckInterval);
+                        statusMessage.textContent = `Error: ${data.error || 'Unknown error'}`;
+                        statusMessage.parentElement.classList.remove('alert-info');
+                        statusMessage.parentElement.classList.add('alert-danger');
+                        break;
+                }
+                
+            } catch (error) {
+                console.error('Error checking status:', error);
+            }
+        }
+
+        // Update progress bar
+        function updateProgressBar(percentage) {
+            statusProgress.style.width = `${percentage}%`;
+            statusProgress.setAttribute('aria-valuenow', percentage);
+        }
+
+        // Get course data
+        async function getCourse(courseId) {
+            try {
+                const response = await fetch(`/course/${courseId}`);
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to get course: ${response.statusText}`);
+                }
+                
+                const course = await response.json();
+                currentCourse = course;
+                displayCourse(course);
+                
+            } catch (error) {
+                console.error('Error getting course:', error);
+            }
+        }
+        
+        // Save course updates
+        async function saveCourse(courseId, updatedCourse) {
+            try {
+                const response = await fetch(`/course/${courseId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(updatedCourse)
+                });
+                
+                if (!response.ok) {
+                    console.error('Failed to save course updates');
+                }
+            } catch (error) {
+                console.error('Error saving course:', error);
+            }
+        }
+
+        // Display course data
+        function displayCourse(course) {
+            // Show course area
+            courseArea.style.display = 'block';
+            
+            // Set course title and description
+            courseTitle.textContent = course.title;
+            courseDescription.textContent = course.description;
+            
+            // Display metadata
+            displayMetadata(course.metadata);
+            
+                // Initialize React Course Player if the course has scenes
+                let hasScenes = false;
+                if (course.sections) {
+                    for (const section of course.sections) {
+                        if (section.scenes && section.scenes.length > 0) {
+                            hasScenes = true;
+                            break;
+                        }
+                    }
+                }
+                
+                if (hasScenes) {
+                    // Mount React Course Player (edits are kept client-side for now)
+                    mountCoursePlayer(course, 'coursePlayerContainer');
+                    courseSections.style.display = 'none'; // Hide traditional display
+                } else {
+                    // Fallback to traditional display
+                    document.getElementById('coursePlayerContainer').style.display = 'none';
+                    displayTraditionalCourse(course);
+                }
+            
+            // Scroll to course area
+            courseArea.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // Display course metadata
+        function displayMetadata(metadata) {
+            courseMetadata.innerHTML = '';
+            
+            if (!metadata) return;
+            
+            const metadataList = document.createElement('dl');
+            metadataList.className = 'row';
+            
+            for (const [key, value] of Object.entries(metadata)) {
+                const dt = document.createElement('dt');
+                dt.className = 'col-sm-3';
+                dt.textContent = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                
+                const dd = document.createElement('dd');
+                dd.className = 'col-sm-9';
+                dd.textContent = value;
+                
+                metadataList.appendChild(dt);
+                metadataList.appendChild(dd);
+            }
+            
+            courseMetadata.appendChild(metadataList);
+        }
+
+        // Display traditional course (fallback)
+        function displayTraditionalCourse(course) {
+            // Clear existing sections
+            courseSections.innerHTML = '';
+            
+            // Add each section
+            course.sections.forEach((section, index) => {
+                const sectionElement = document.createElement('div');
+                sectionElement.className = 'course-section mb-4';
+                
+                const sectionTitle = document.createElement('h3');
+                sectionTitle.textContent = `${index + 1}. ${section.title}`;
+                
+                const sectionContent = document.createElement('div');
+                
+                // Add duration if available
+                if (section.duration) {
+                    const duration = document.createElement('p');
+                    duration.className = 'text-muted';
+                    duration.textContent = `Duration: ${section.duration}`;
+                    sectionContent.appendChild(duration);
+                }
+                
+                // Add content
+                if (section.content) {
+                    const content = document.createElement('p');
+                    content.textContent = section.content;
+                    sectionContent.appendChild(content);
+                }
+                
+                sectionElement.appendChild(sectionTitle);
+                sectionElement.appendChild(sectionContent);
+                courseSections.appendChild(sectionElement);
+            });
+        }
+    </script>
+</body>
+</html>
