@@ -71,12 +71,24 @@ def extract_transcript(video_path):
         logger.error(f"Transcript extraction error: {str(e)}")
         raise Exception(f"Transcript extraction failed: {str(e)}")
 
-def generate_course(transcript, video_title):
+def generate_course(transcript, video_title, mode="full"):
     """Generate a course structure from the transcript using OpenAI with scenes and visual elements"""
     logger.info("Generating course from transcript with scenes and visual elements")
     
     try:
         # Use OpenAI to structure the transcript into a course with scenes
+        # Tailor style guidelines based on mode
+        if mode == "concise":
+            style_instructions = (
+                "Aim for brevity: fewer sections, 1-2 scenes per section, "
+                "short bullet text, minimal visual elements per scene. Generate at most 1 quiz section with 3 questions."
+            )
+        else:
+            style_instructions = (
+                "Fully fledged: comprehensive sections, richer scenes with mixed visual elements, "
+                "and quiz sections after every 2-3 content sections with 3-5 questions."
+            )
+
         response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=[
@@ -88,7 +100,7 @@ def generate_course(transcript, video_title):
                 2. A concise description
                 3. Multiple logical sections with appropriate titles
                 4. Each section should contain multiple scenes with visual elements
-                5. Quiz sections after every 2-3 content sections to test understanding
+                5. Quiz sections cadence and scene richness should follow this guidance: {STYLE_GUIDANCE}
                 
                 For each scene, determine the appropriate visual elements based on the content:
                 - Avatar: When presenting information that would benefit from a human presenter
@@ -183,11 +195,11 @@ def generate_course(transcript, video_title):
                 - When creating blocks, choose a mix of types (image, video, doc, flipcard, checklist) that best convey the section's key points. Keep blocks concise and self-contained.
                 - For quiz sections: set "type": "quiz" and include relevant questions
                 - For content sections: set "type": "content" and focus on scenes
-                - Add quiz sections after every 2-3 content sections
+                - Adjust the number and depth of sections/scenes based on the style guidance
                 - Quiz questions should test understanding of the preceding content sections
                 - Make quiz questions challenging but fair, testing key concepts
                 """},
-                {"role": "user", "content": f"Video Title: {video_title}\n\nTranscript: {transcript}"}
+                {"role": "user", "content": f"Video Title: {video_title}\n\nTranscript: {transcript}\n\nSTYLE_GUIDANCE: {style_instructions}"}
             ]
         )
         
@@ -231,7 +243,8 @@ def process_video(video_id):
         videos_db[video_id]["status"] = "transcript_extracted"
         
         # Generate course
-        course = generate_course(transcript, videos_db[video_id]["title"])
+        mode = videos_db[video_id].get("mode", "full")
+        course = generate_course(transcript, videos_db[video_id]["title"], mode)
         course_id = str(uuid.uuid4())
         courses_db[course_id] = course
         
@@ -267,6 +280,7 @@ def upload_video():
     
     # Store video metadata
     video_title = request.form.get('title', filename)
+    generation_mode = request.form.get('mode', 'full')
     videos_db[video_id] = {
         "id": video_id,
         "title": video_title,
@@ -274,7 +288,8 @@ def upload_video():
         "path": file_path,
         "status": "uploaded",
         "transcript": None,
-        "course_id": None
+        "course_id": None,
+        "mode": generation_mode
     }
     
     # Process the video in a background thread

@@ -353,6 +353,13 @@
                         <label for="videoTitle" class="form-label">Title (Optional)</label>
                         <input type="text" class="form-control" id="videoTitle" placeholder="Enter a title for your video">
                     </div>
+                    <div class="mb-3">
+                        <label for="generationMode" class="form-label">Generation Mode</label>
+                        <select id="generationMode" class="form-control">
+                            <option value="concise">Concise</option>
+                            <option value="full" selected>Fully Fledged</option>
+                        </select>
+                    </div>
                     <button type="submit" class="btn btn-primary">Upload & Convert</button>
                     <div class="loading mt-3">
                         <div class="loading-spinner">eg</div>
@@ -444,6 +451,7 @@
             
             const videoFile = document.getElementById('videoFile').files[0];
             const videoTitle = document.getElementById('videoTitle').value;
+            const generationMode = document.getElementById('generationMode').value || 'full';
             
             if (!videoFile) {
                 alert('Please select a video file');
@@ -459,6 +467,7 @@
             if (videoTitle) {
                 formData.append('title', videoTitle);
             }
+            formData.append('mode', generationMode);
             
             try {
                 // Upload video

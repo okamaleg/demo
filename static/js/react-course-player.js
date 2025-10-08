@@ -20,17 +20,36 @@ class CoursePlayer extends React.Component {
       sceneDurations: [],
       isQuizOpen: false,
       currentQuiz: null,
-      quizResults: {}
+      quizResults: {},
+      voiceOverEnabled: true
     };
     this.canvasRef = React.createRef();
     this.videoCanvasRef = React.createRef();
     this.animationRef = null;
     this.videoAnimationRef = null;
+    // Preload placeholder image for scene images
+    this.scenePlaceholderImage = new Image();
+    this.scenePlaceholderLoaded = false;
+    this.scenePlaceholderImage.onload = () => { this.scenePlaceholderLoaded = true; };
+    this.scenePlaceholderImage.src = '/images/image.png';
+    // Speech synthesis placeholders
+    this.voices = [];
+    this.selectedVoice = null;
+    this.currentUtterance = null;
   }
 
   componentDidMount() {
     this.drawCurrentScene();
     this.calculateTotalScenes();
+    // Initialize TTS voices
+    if ('speechSynthesis' in window) {
+      const loadVoices = () => {
+        this.voices = window.speechSynthesis.getVoices();
+        this.selectedVoice = this.voices.find(v => (v.lang || '').toLowerCase().startsWith('en')) || this.voices[0] || null;
+      };
+      loadVoices();
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
   }
 
   componentDidUpdate(prevProps, prevState) {
@@ -59,6 +78,7 @@ class CoursePlayer extends React.Component {
     if (this.videoAnimationRef) {
       cancelAnimationFrame(this.videoAnimationRef);
     }
+    this.stopVoiceOver();
   }
   
   calculateTotalScenes() {
@@ -72,13 +92,32 @@ class CoursePlayer extends React.Component {
       if (section.scenes) {
         section.scenes.forEach(scene => {
           totalScenes++;
-          // Default duration is 5 seconds if not specified
-          sceneDurations.push(scene.duration || 5);
+          // Use provided duration or estimate from content
+          sceneDurations.push(this.estimateSceneDuration(scene));
         });
       }
     });
     
     this.setState({ totalScenes, sceneDurations });
+  }
+
+  estimateSceneDuration(scene) {
+    if (!scene) return 5;
+    if (typeof scene.duration === 'number' && isFinite(scene.duration) && scene.duration > 0) {
+      return scene.duration; // seconds
+    }
+    // Heuristic based on narration length + visual complexity
+    const narration = (scene.narration || '').trim();
+    const words = narration ? narration.split(/\s+/).length : 0;
+    // Assume ~140 wpm -> ~0.43s per word
+    let estimated = Math.max(3, Math.min(60, Math.round(words * 0.43)));
+    // Add a small bonus for visual elements count (up to +4s)
+    const veCount = Array.isArray(scene.visual_elements) ? scene.visual_elements.length : 0;
+    estimated += Math.min(4, Math.floor(veCount / 2));
+    // Clamp sensible bounds
+    if (estimated < 3) estimated = 3;
+    if (estimated > 90) estimated = 90;
+    return estimated;
   }
 
   drawCurrentScene() {
@@ -278,21 +317,19 @@ class CoursePlayer extends React.Component {
         imgHeight = height * 0.3;
     }
     
-    // Draw placeholder image
-    ctx.fillStyle = '#c3e6cb';
-    ctx.fillRect(position.x - imgWidth/2, position.y - imgHeight/2, imgWidth, imgHeight);
-    
-    // Draw image icon and description
-    ctx.font = '24px Arial';
-    ctx.fillStyle = '#000000';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('🖼️', position.x, position.y - 15);
-    
-    ctx.font = '14px Arial';
-    const description = element.description || 'Image';
-    const truncatedDesc = description.length > 30 ? description.substring(0, 27) + '...' : description;
-    ctx.fillText(truncatedDesc, position.x, position.y + 15);
+    // Draw placeholder image asset if loaded; fallback to gray box
+    if (this.scenePlaceholderLoaded) {
+      ctx.drawImage(
+        this.scenePlaceholderImage,
+        position.x - imgWidth/2,
+        position.y - imgHeight/2,
+        imgWidth,
+        imgHeight
+      );
+    } else {
+      ctx.fillStyle = '#e5e7eb';
+      ctx.fillRect(position.x - imgWidth/2, position.y - imgHeight/2, imgWidth, imgHeight);
+    }
   }
 
   drawText(ctx, width, height, element) {
@@ -464,6 +501,7 @@ class CoursePlayer extends React.Component {
         this.startAnimation();
       } else if (this.animationRef) {
         cancelAnimationFrame(this.animationRef);
+        this.stopVoiceOver();
       }
     });
   }
@@ -476,7 +514,9 @@ class CoursePlayer extends React.Component {
     if (!section || !section.scenes) return;
     
     const scene = section.scenes[currentScene];
-    const duration = 5000; // 5 seconds per scene
+    const duration = this.estimateSceneDuration(scene) * 1000; // ms
+    // Start voiceover for this scene
+    this.startVoiceOver(scene);
     
     const animate = () => {
       const now = Date.now();
@@ -488,6 +528,7 @@ class CoursePlayer extends React.Component {
       if (progress < 1) {
         this.animationRef = requestAnimationFrame(animate);
       } else {
+        this.stopVoiceOver();
         this.nextScene();
       }
     };
@@ -559,6 +600,8 @@ class CoursePlayer extends React.Component {
         this.drawCurrentScene();
       }, 10);
     });
+    // Stop narration when manually switching
+    this.stopVoiceOver();
   }
   
   editCurrentScene = () => {
@@ -603,6 +646,8 @@ class CoursePlayer extends React.Component {
       currentVideoScene: 0,
       videoProgress: 0
     }));
+    // Stop any ongoing narration
+    this.stopVoiceOver();
   }
   
   startVideoPlayback = () => {
@@ -681,8 +726,10 @@ class CoursePlayer extends React.Component {
     const ctx = canvas.getContext('2d');
     const { width, height } = canvas;
     
-    // Get scene duration (default 5 seconds)
-    const duration = (scene.duration || 5) * 1000; // convert to ms
+    // Get scene duration (estimated if not provided)
+    const duration = this.estimateSceneDuration(scene) * 1000; // ms
+    // Start voiceover for this scene
+    this.startVoiceOver(scene);
     
     // Determine animation type
     let animationType = 'fadeIn'; // default
@@ -779,11 +826,40 @@ class CoursePlayer extends React.Component {
         this.videoAnimationRef = requestAnimationFrame(animate);
       } else {
         // Add a small delay before moving to the next scene
+        this.stopVoiceOver();
         setTimeout(onComplete, 500);
       }
     };
     
     this.videoAnimationRef = requestAnimationFrame(animate);
+  }
+
+  startVoiceOver(scene) {
+    try {
+      if (!this.state.voiceOverEnabled) return;
+      if (!scene || !scene.narration) return;
+      if (!('speechSynthesis' in window)) return;
+      // cancel prior
+      this.stopVoiceOver();
+      const utter = new SpeechSynthesisUtterance(scene.narration);
+      if (this.selectedVoice) utter.voice = this.selectedVoice;
+      utter.rate = 1.0;
+      utter.pitch = 1.0;
+      utter.volume = 1.0;
+      this.currentUtterance = utter;
+      window.speechSynthesis.speak(utter);
+    } catch (e) {
+      console.warn('TTS error', e);
+    }
+  }
+
+  stopVoiceOver() {
+    try {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      this.currentUtterance = null;
+    } catch (_) {}
   }
   
   drawAnimatedElement = (ctx, width, height, element, animationType, progress) => {
@@ -883,20 +959,12 @@ class CoursePlayer extends React.Component {
   drawImageAt = (ctx, x, y, element) => {
     const imgWidth = 200;
     const imgHeight = 150;
-    
-    ctx.fillStyle = '#c3e6cb';
-    ctx.fillRect(x - imgWidth/2, y - imgHeight/2, imgWidth, imgHeight);
-    
-    ctx.font = '24px Arial';
-    ctx.fillStyle = '#000000';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('🖼️', x, y - 15);
-    
-    ctx.font = '14px Arial';
-    const description = element.description || 'Image';
-    const truncatedDesc = description.length > 30 ? description.substring(0, 27) + '...' : description;
-    ctx.fillText(truncatedDesc, x, y + 15);
+    if (this.scenePlaceholderLoaded) {
+      ctx.drawImage(this.scenePlaceholderImage, x - imgWidth/2, y - imgHeight/2, imgWidth, imgHeight);
+    } else {
+      ctx.fillStyle = '#e5e7eb';
+      ctx.fillRect(x - imgWidth/2, y - imgHeight/2, imgWidth, imgHeight);
+    }
   }
   
   drawShapeAt = (ctx, x, y, element) => {
@@ -1141,6 +1209,17 @@ class CoursePlayer extends React.Component {
                 {videoMode ? 'Exit Video Mode' : 'Play as Video'}
               </button>
             )}
+            <button
+              onClick={() => {
+                const next = !this.state.voiceOverEnabled;
+                this.setState({ voiceOverEnabled: next });
+                if (!next) this.stopVoiceOver();
+              }}
+              className={`px-4 py-2 rounded ${this.state.voiceOverEnabled ? 'bg-green-600 text-white' : 'bg-gray-600 text-white'}`}
+              title="Toggle voice over narration"
+            >
+              {this.state.voiceOverEnabled ? 'Voice Over: On' : 'Voice Over: Off'}
+            </button>
           </div>
         </div>
         
