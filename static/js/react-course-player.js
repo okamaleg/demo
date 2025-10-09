@@ -13,18 +13,15 @@ class CoursePlayer extends React.Component {
       selectedScene: null,
       isEditorOpen: false,
       sceneToEdit: null,
-      videoMode: false,
-      videoProgress: 0,
-      currentVideoScene: 0,
       totalScenes: 0,
       sceneDurations: [],
       isQuizOpen: false,
       currentQuiz: null,
       quizResults: {},
-      voiceOverEnabled: true
+      voiceOverEnabled: true,
+      isCanvasHovered: false
     };
     this.canvasRef = React.createRef();
-    this.videoCanvasRef = React.createRef();
     this.animationRef = null;
     this.videoAnimationRef = null;
     // Preload placeholder image for scene images
@@ -48,13 +45,20 @@ class CoursePlayer extends React.Component {
     if ('speechSynthesis' in window) {
       const loadVoices = () => {
         this.voices = window.speechSynthesis.getVoices();
-        this.selectedVoice = this.voices.find(v => (v.lang || '').toLowerCase().startsWith('en')) || this.voices[0] || null;
+        // Prefer more natural voices
+        this.selectedVoice = this.voices.find(v => 
+          (v.name || '').toLowerCase().includes('google') || 
+          (v.name || '').toLowerCase().includes('samantha') ||
+          (v.name || '').toLowerCase().includes('alex') ||
+          (v.name || '').toLowerCase().includes('daniel')
+        ) || this.voices.find(v => (v.lang || '').toLowerCase().startsWith('en')) || this.voices[0] || null;
       };
       loadVoices();
       window.speechSynthesis.onvoiceschanged = loadVoices;
     }
     // Fetch available images and preload
     this.fetchAndMapImages();
+    
   }
 
   componentDidUpdate(prevProps, prevState) {
@@ -147,98 +151,119 @@ class CoursePlayer extends React.Component {
     if (typeof scene.duration === 'number' && isFinite(scene.duration) && scene.duration > 0) {
       return scene.duration; // seconds
     }
-    // Heuristic based on narration length + visual complexity
+    
+    // Smart duration calculation (same as scene editor)
     const narration = (scene.narration || '').trim();
-    const words = narration ? narration.split(/\s+/).length : 0;
-    // Assume ~140 wpm -> ~0.43s per word
-    let estimated = Math.max(3, Math.min(60, Math.round(words * 0.43)));
-    // Add a small bonus for visual elements count (up to +4s)
-    const veCount = Array.isArray(scene.visual_elements) ? scene.visual_elements.length : 0;
-    estimated += Math.min(4, Math.floor(veCount / 2));
-    // Clamp sensible bounds
-    if (estimated < 3) estimated = 3;
-    if (estimated > 90) estimated = 90;
-    return estimated;
+    if (!narration) return 3; // Default 3 seconds for empty content
+    
+    // Calculate based on word count and reading speed
+    const words = narration.trim().split(/\s+/).length;
+    
+    // Base calculation: ~140 words per minute = ~0.43 seconds per word
+    let baseDuration = Math.max(3, Math.round(words * 0.43));
+    
+    // Adjust for content complexity
+    const visualElements = Array.isArray(scene.visual_elements) ? scene.visual_elements.length : 0;
+    const hasComplexWords = /[A-Z]{3,}|[0-9]+|\.{2,}|!{2,}|\?{2,}/.test(narration);
+    
+    // Add time for visual elements (up to 4 seconds)
+    baseDuration += Math.min(4, Math.floor(visualElements / 2));
+    
+    // Add time for complex content (up to 3 seconds)
+    if (hasComplexWords) {
+      baseDuration += Math.min(3, Math.floor(words / 20));
+    }
+    
+    // Add time for punctuation pauses
+    const punctuationCount = (narration.match(/[.!?]/g) || []).length;
+    baseDuration += Math.min(2, punctuationCount * 0.3);
+    
+    // Clamp to reasonable bounds
+    return Math.max(3, Math.min(30, baseDuration));
   }
 
   drawCurrentScene() {
     // Don't draw if we're in video mode
     if (this.state.videoMode) {
-      console.log('In video mode, skipping drawCurrentScene');
       return;
     }
 
     const canvas = this.canvasRef.current;
-    if (!canvas) {
-      console.log('Canvas not found');
-      return;
-    }
+    if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
-    const { width, height } = canvas;
-    const { currentSection, currentScene } = this.state;
     
-    // Ensure canvas is properly sized
-    if (width === 0 || height === 0) {
-      console.log('Canvas has zero dimensions:', { width, height });
+    // Set canvas size
+    canvas.width = 800;
+    canvas.height = 450;
+    
+    // Clear canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    const scene = this.getCurrentScene();
+    if (!scene) {
+      this.drawEmptyScene(ctx, canvas.width, canvas.height);
       return;
     }
     
-    // Clear canvas completely and reset context
-    ctx.clearRect(0, 0, width, height);
-    ctx.save();
+    // Draw the scene using unified renderer
+    this.drawScene(ctx, canvas.width, canvas.height, scene);
     
-    // Debug logging
-    console.log('Drawing scene:', { currentSection, currentScene, canvasSize: { width, height } });
-    
-    // Get current section
-    const section = this.state.course.sections[currentSection];
-    if (!section) {
-      console.log('No section found for index:', currentSection);
-      return;
+    // Continue animation for lip syncing
+    if (this.state.voiceOverEnabled && this.state.isPlaying) {
+      requestAnimationFrame(() => this.drawCurrentScene());
     }
-    
-    // Handle quiz sections differently
-    if (section.type === 'quiz') {
-      this.drawQuizSection(ctx, width, height, section);
-      return;
-    }
-    
-    // Handle regular content sections
-    if (!section.scenes || !section.scenes[currentScene]) {
-      console.log('No scene found:', { sectionScenes: section.scenes, currentScene });
-      return;
-    }
-    
-    const scene = section.scenes[currentScene];
-    console.log('Drawing scene data:', { sceneType: scene.scene_type, narration: scene.narration?.substring(0, 50) + '...' });
-    
-    // Draw background (gradient)
+  }
+
+  drawEmptyScene = (ctx, width, height) => {
+    // Draw gradient background
     const gradient = ctx.createLinearGradient(0, 0, width, height);
     gradient.addColorStop(0, '#3b82f6');
     gradient.addColorStop(1, '#2563eb');
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
     
-    // Draw scene elements
-    if (scene.visual_elements) {
+    // Draw "No scene" message
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.font = '24px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('No scene available', width / 2, height / 2);
+  }
+
+  drawScene = (ctx, width, height, scene) => {
+    // Draw gradient background
+    const gradient = ctx.createLinearGradient(0, 0, width, height);
+    gradient.addColorStop(0, '#3b82f6');
+    gradient.addColorStop(1, '#2563eb');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, height);
+    
+    // Draw visual elements
+    if (scene.visual_elements && scene.visual_elements.length > 0) {
       scene.visual_elements.forEach(element => {
-        this.drawVisualElement(ctx, width, height, element);
+        this.drawElement(ctx, width, height, element);
       });
     }
     
-    // Draw scene type and narration
+    // Draw scene info overlay
+    this.drawSceneOverlay(ctx, width, height, scene);
+  }
+
+  drawSceneOverlay = (ctx, width, height, scene) => {
+    // Semi-transparent overlay
     ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
     ctx.fillRect(0, height - 100, width, 100);
     
-    ctx.font = 'bold 16px Arial';
+    // Scene title
     ctx.fillStyle = '#ffffff';
+    ctx.font = '16px Arial';
     ctx.textAlign = 'left';
-    ctx.fillText(`Scene ${currentScene + 1} - ${scene.scene_type || 'Content'}`, 20, height - 75);
+    ctx.fillText(`Scene ${this.state.currentScene + 1} - ${scene.scene_type || 'Content'}`, 20, height - 75);
     
+    // Narration text (truncated)
     ctx.font = '14px Arial';
-    ctx.fillStyle = '#ffffff';
-    const narration = scene.narration || 'No narration available';
+    const narration = scene.narration || '';
     const words = narration.split(' ');
     let line = '';
     const lines = [];
@@ -262,35 +287,251 @@ class CoursePlayer extends React.Component {
     if (lines.length > 2) {
       ctx.fillText('...', 20, height - 10);
     }
-    
-    // Restore context state
-    ctx.restore();
   }
 
-  drawVisualElement(ctx, width, height, element) {
+  drawElement = (ctx, width, height, element) => {
+    // Get element position - use explicit coordinates if available, otherwise use position
+    const x = element.x !== undefined ? element.x : (element.position === 'left' ? 150 : element.position === 'right' ? 650 : 400);
+    const y = element.y !== undefined ? element.y : (element.position === 'top' ? 100 : element.position === 'bottom' ? 350 : 225);
+    
     switch (element.type) {
       case 'avatar':
-        this.drawAvatar(ctx, width, height, element);
+        this.drawAvatarElement(ctx, x, y, element);
         break;
       case 'image':
-        this.drawImage(ctx, width, height, element);
+        this.drawImageElement(ctx, x, y, element);
         break;
       case 'text':
-        this.drawText(ctx, width, height, element);
+        this.drawTextElement(ctx, x, y, element);
         break;
       case 'shape':
-        this.drawShape(ctx, width, height, element);
+        this.drawShapeElement(ctx, x, y, element);
         break;
     }
   }
 
-  drawAvatar(ctx, width, height, element) {
-    // Use custom position if available, otherwise use preset position
-    let position;
-    if (element.position === 'custom' && element.customX !== undefined && element.customY !== undefined) {
-      position = { x: element.customX, y: element.customY };
+  drawAvatarElement = (ctx, x, y, element) => {
+    const avatarSize = 120;
+    const isSpeaking = this.state.voiceOverEnabled && this.state.isPlaying;
+    
+    // Draw avatar background circle
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.beginPath();
+    ctx.arc(x, y, avatarSize / 2, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Draw human avatar
+    this.drawHumanAvatar(ctx, x, y, avatarSize, element, isSpeaking);
+  }
+
+  drawHumanAvatar = (ctx, x, y, size, element, isSpeaking) => {
+    const scale = size / 100;
+    
+    // Face
+    ctx.fillStyle = '#FDBCB4'; // Skin tone
+    ctx.beginPath();
+    ctx.arc(x, y - 5, 35 * scale, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Hair
+    ctx.fillStyle = element.hairColor || '#8B4513';
+    ctx.beginPath();
+    ctx.arc(x, y - 15, 40 * scale, Math.PI, 0);
+    ctx.fill();
+    
+    // Eyes
+    ctx.fillStyle = '#000000';
+    ctx.beginPath();
+    ctx.arc(x - 12 * scale, y - 10, 3 * scale, 0, Math.PI * 2);
+    ctx.arc(x + 12 * scale, y - 10, 3 * scale, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Eye highlights
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(x - 11 * scale, y - 11, 1 * scale, 0, Math.PI * 2);
+    ctx.arc(x + 13 * scale, y - 11, 1 * scale, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Eyebrows
+    ctx.strokeStyle = element.hairColor || '#8B4513';
+    ctx.lineWidth = 2 * scale;
+    ctx.beginPath();
+    ctx.moveTo(x - 18 * scale, y - 18);
+    ctx.lineTo(x - 6 * scale, y - 16);
+    ctx.moveTo(x + 6 * scale, y - 16);
+    ctx.lineTo(x + 18 * scale, y - 18);
+    ctx.stroke();
+    
+    // Nose
+    ctx.fillStyle = '#E8A87C';
+    ctx.beginPath();
+    ctx.arc(x, y - 2, 2 * scale, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Mouth with lip sync
+    this.drawMouth(ctx, x, y + 8, scale, isSpeaking, element.emotion);
+    
+    // Body/shirt
+    ctx.fillStyle = element.shirtColor || '#4A90E2';
+    ctx.fillRect(x - 25 * scale, y + 25, 50 * scale, 40 * scale);
+    
+    // Arms
+    ctx.fillStyle = '#FDBCB4';
+    ctx.fillRect(x - 35 * scale, y + 30, 15 * scale, 25 * scale);
+    ctx.fillRect(x + 20 * scale, y + 30, 15 * scale, 25 * scale);
+  }
+
+  drawMouth = (ctx, x, y, scale, isSpeaking, emotion) => {
+    ctx.fillStyle = '#8B0000'; // Lip color
+    
+    if (isSpeaking) {
+      // Animated speaking mouth
+      const time = Date.now() * 0.01;
+      const mouthOpenness = Math.sin(time) * 0.5 + 0.5;
+      
+      // Open mouth for speaking
+      ctx.beginPath();
+      ctx.ellipse(x, y, 8 * scale, 4 * scale * mouthOpenness, 0, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Teeth
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.ellipse(x, y, 6 * scale, 2 * scale * mouthOpenness, 0, 0, Math.PI * 2);
+      ctx.fill();
     } else {
-      position = this.getPositionCoordinates(element.position, width, height);
+      // Closed mouth with emotion
+      switch (emotion) {
+        case 'happy':
+          // Smile
+          ctx.beginPath();
+          ctx.arc(x, y - 2, 8 * scale, 0, Math.PI);
+          ctx.stroke();
+          break;
+        case 'serious':
+          // Straight line
+          ctx.beginPath();
+          ctx.moveTo(x - 6 * scale, y);
+          ctx.lineTo(x + 6 * scale, y);
+          ctx.stroke();
+          break;
+        case 'thoughtful':
+          // Slight frown
+          ctx.beginPath();
+          ctx.arc(x, y + 2, 8 * scale, Math.PI, 0);
+          ctx.stroke();
+          break;
+        default:
+          // Neutral mouth
+          ctx.beginPath();
+          ctx.moveTo(x - 4 * scale, y);
+          ctx.lineTo(x + 4 * scale, y);
+          ctx.stroke();
+      }
+    }
+  }
+
+  drawImageElement = (ctx, x, y, element) => {
+    const imgWidth = element.width || 200;
+    const imgHeight = element.height || 150;
+    
+    // Check if this is a video snapshot
+    if (element.is_video_snapshot && element.image_data) {
+      // Draw the actual video snapshot
+      const img = new Image();
+      img.onload = () => {
+        // Redraw the canvas when image loads
+        this.drawCurrentScene();
+      };
+      img.src = element.image_data;
+      
+      // Draw the image at its specified size
+      ctx.drawImage(img, x - imgWidth/2, y - imgHeight/2, imgWidth, imgHeight);
+      
+      // Add a subtle border to indicate it's a video snapshot
+      ctx.strokeStyle = 'rgba(16, 185, 129, 0.3)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x - imgWidth/2, y - imgHeight/2, imgWidth, imgHeight);
+    } else {
+      // Regular image placeholder
+      ctx.fillStyle = '#e5e7eb';
+      ctx.fillRect(x - imgWidth/2, y - imgHeight/2, imgWidth, imgHeight);
+      
+      // Draw image icon
+      ctx.font = '24px Arial';
+      ctx.fillStyle = '#6b7280';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('🖼️', x, y);
+    }
+  }
+
+  drawTextElement = (ctx, x, y, element) => {
+    const content = element.content || '';
+    const maxWidth = 300;
+    
+    // Draw text background
+    ctx.fillStyle = 'rgba(255, 243, 205, 0.8)';
+    ctx.fillRect(x - maxWidth/2, y - 20, maxWidth, 40);
+    
+    // Draw text
+    ctx.font = this.getTextFontByStyle(element.style);
+    ctx.fillStyle = '#000000';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(content, x, y);
+  }
+
+  drawShapeElement = (ctx, x, y, element) => {
+    const width = element.width || 100;
+    const height = element.height || 100;
+    
+    ctx.fillStyle = element.color || 'rgba(220, 53, 69, 0.3)';
+    ctx.strokeStyle = element.color || 'rgba(220, 53, 69, 0.7)';
+    ctx.lineWidth = 2;
+    
+    switch (element.shape_type) {
+      case 'rectangle':
+        ctx.fillRect(x - width/2, y - height/2, width, height);
+        ctx.strokeRect(x - width/2, y - height/2, width, height);
+        break;
+      case 'circle':
+        ctx.beginPath();
+        ctx.arc(x, y, width/2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        break;
+      case 'arrow':
+        ctx.beginPath();
+        ctx.moveTo(x - 25, y);
+        ctx.lineTo(x + 15, y);
+        ctx.lineTo(x + 10, y - 5);
+        ctx.moveTo(x + 15, y);
+        ctx.lineTo(x + 10, y + 5);
+        ctx.stroke();
+        break;
+    }
+  }
+
+  getTextFontByStyle = (style) => {
+    switch (style) {
+      case 'heading': return 'bold 18px Arial';
+      case 'bullet': return '16px Arial';
+      case 'quote': return 'italic 16px Arial';
+      case 'definition': return '16px Arial';
+      default: return '16px Arial';
+    }
+  }
+
+  drawAvatar(ctx, width, height, element) {
+    // ALWAYS use actual coordinates if available - this is the fix!
+    let position;
+    if (element.x !== undefined && element.y !== undefined) {
+      position = { x: element.x, y: element.y };
+    } else {
+      // Fallback to center if no coordinates
+      position = { x: width/2, y: height/2 };
     }
     const avatarSize = 120;
     
@@ -319,12 +560,13 @@ class CoursePlayer extends React.Component {
   }
 
   drawImage(ctx, width, height, element) {
-    // Use custom position if available, otherwise use preset position
+    // ALWAYS use actual coordinates if available - this is the fix!
     let position;
-    if (element.position === 'custom' && element.customX !== undefined && element.customY !== undefined) {
-      position = { x: element.customX, y: element.customY };
+    if (element.x !== undefined && element.y !== undefined) {
+      position = { x: element.x, y: element.y };
     } else {
-      position = this.getPositionCoordinates(element.position, width, height);
+      // Fallback to center if no coordinates
+      position = { x: width/2, y: height/2 };
     }
     let imgWidth, imgHeight;
     
@@ -660,6 +902,11 @@ class CoursePlayer extends React.Component {
     if (typeof openSceneEditor === 'function') {
       openSceneEditor(scene, (updatedScene) => {
         this.updateScene(updatedScene, sectionIndex, sceneIndex);
+      }, {
+        // Pass the current course player instance so the scene editor can get updated scenes
+        coursePlayer: this,
+        sectionIndex: sectionIndex,
+        sceneIndex: sceneIndex
       });
     }
   }
@@ -681,87 +928,11 @@ class CoursePlayer extends React.Component {
     });
   }
   
-  toggleVideoMode = () => {
-    this.setState(prevState => ({ 
-      videoMode: !prevState.videoMode,
-      currentVideoScene: 0,
-      videoProgress: 0
-    }));
-    // Stop any ongoing narration
-    this.stopVoiceOver();
-  }
   
-  startVideoPlayback = () => {
-    const canvas = this.videoCanvasRef.current;
-    if (!canvas) return;
-    
-    // Reset state
-    this.setState({
-      currentVideoScene: 0,
-      videoProgress: 0
-    }, () => {
-      this.playNextVideoScene();
-    });
-  }
   
-  playNextVideoScene = () => {
-    const { currentVideoScene, totalScenes, sceneDurations } = this.state;
-    
-    if (currentVideoScene >= totalScenes) {
-      // End of video
-      this.setState({ videoMode: false });
-      return;
-    }
-    
-    // Find the section and scene indices for the current video scene
-    let sceneCounter = 0;
-    let targetSectionIndex = 0;
-    let targetSceneIndex = 0;
-    let found = false;
-    
-    const course = this.state.course;
-    
-    for (let i = 0; i < course.sections.length; i++) {
-      const section = course.sections[i];
-      if (!section.scenes) continue;
-      
-      for (let j = 0; j < section.scenes.length; j++) {
-        if (sceneCounter === currentVideoScene) {
-          targetSectionIndex = i;
-          targetSceneIndex = j;
-          found = true;
-          break;
-        }
-        sceneCounter++;
-      }
-      
-      if (found) break;
-    }
-    
-    if (!found) {
-      // Couldn't find the scene, end playback
-      this.setState({ videoMode: false });
-      return;
-    }
-    
-    // Get the scene
-    const section = course.sections[targetSectionIndex];
-    const scene = section.scenes[targetSceneIndex];
-    
-    // Play this scene with animation
-    this.playSceneWithAnimation(scene, targetSectionIndex, targetSceneIndex, () => {
-      // When animation is done, move to next scene
-      this.setState(prevState => ({
-        currentVideoScene: prevState.currentVideoScene + 1,
-        videoProgress: ((prevState.currentVideoScene + 1) / totalScenes) * 100
-      }), () => {
-        this.playNextVideoScene();
-      });
-    });
-  }
   
   playSceneWithAnimation = (scene, sectionIndex, sceneIndex, onComplete) => {
-    const canvas = this.videoCanvasRef.current;
+    const canvas = this.canvasRef.current;
     if (!canvas) return;
     
     const ctx = canvas.getContext('2d');
@@ -920,9 +1091,11 @@ class CoursePlayer extends React.Component {
       this.stopVoiceOver();
       const utter = new SpeechSynthesisUtterance(scene.narration);
       if (this.selectedVoice) utter.voice = this.selectedVoice;
-      utter.rate = 1.0;
-      utter.pitch = 1.0;
+      utter.rate = 0.9; // Slightly slower for more natural speech
+      utter.pitch = 1.1; // Slightly higher pitch
       utter.volume = 1.0;
+      // Add pauses for better flow
+      utter.text = scene.narration.replace(/\./g, '. ').replace(/,/g, ', ');
       this.currentUtterance = utter;
       window.speechSynthesis.speak(utter);
     } catch (e) {
@@ -1033,14 +1206,127 @@ class CoursePlayer extends React.Component {
     ctx.fillText(content, x, y);
   }
   
+  drawText = (ctx, width, height, element) => {
+    // ALWAYS use actual coordinates if available - this is the fix!
+    let position;
+    if (element.x !== undefined && element.y !== undefined) {
+      position = { x: element.x, y: element.y };
+    } else {
+      // Fallback to center if no coordinates
+      position = { x: width/2, y: height/2 };
+    }
+    
+    const content = element.content || 'Text';
+    const fontSize = element.font_size || 16;
+    const color = element.color || '#000000';
+    const backgroundColor = element.background_color || 'transparent';
+    
+    // Draw background if specified
+    if (backgroundColor !== 'transparent') {
+      ctx.fillStyle = backgroundColor;
+      const textWidth = ctx.measureText(content).width;
+      const padding = 10;
+      ctx.fillRect(position.x - textWidth/2 - padding, position.y - fontSize/2 - padding, textWidth + padding*2, fontSize + padding*2);
+    }
+    
+    // Draw text
+    ctx.font = `${fontSize}px Arial`;
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(content, position.x, position.y);
+  }
+
+  drawShape = (ctx, width, height, element) => {
+    // ALWAYS use actual coordinates if available - this is the fix!
+    let position;
+    if (element.x !== undefined && element.y !== undefined) {
+      position = { x: element.x, y: element.y };
+    } else {
+      // Fallback to center if no coordinates
+      position = { x: width/2, y: height/2 };
+    }
+    
+    const shapeType = element.shape_type || 'rectangle';
+    const shapeWidth = element.width || 100;
+    const shapeHeight = element.height || 50;
+    const color = element.color || '#3b82f6';
+    
+    ctx.fillStyle = color;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    
+    switch (shapeType) {
+      case 'rectangle':
+        ctx.fillRect(position.x - shapeWidth/2, position.y - shapeHeight/2, shapeWidth, shapeHeight);
+        break;
+      case 'circle':
+        ctx.beginPath();
+        ctx.arc(position.x, position.y, shapeWidth/2, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+      case 'arrow':
+        ctx.beginPath();
+        ctx.moveTo(position.x - shapeWidth/2, position.y);
+        ctx.lineTo(position.x + shapeWidth/2, position.y);
+        ctx.moveTo(position.x + shapeWidth/2 - 10, position.y - 5);
+        ctx.lineTo(position.x + shapeWidth/2, position.y);
+        ctx.lineTo(position.x + shapeWidth/2 - 10, position.y + 5);
+        ctx.stroke();
+        break;
+      default:
+        ctx.fillRect(position.x - shapeWidth/2, position.y - shapeHeight/2, shapeWidth, shapeHeight);
+    }
+  }
+
   drawImageAt = (ctx, x, y, element) => {
     const imgWidth = 200;
     const imgHeight = 150;
-    if (this.scenePlaceholderLoaded) {
-      ctx.drawImage(this.scenePlaceholderImage, x - imgWidth/2, y - imgHeight/2, imgWidth, imgHeight);
+    
+    // Check if this is a video snapshot (main visual element)
+    if (element.is_video_snapshot) {
+      // Draw the actual video snapshot (large, main element)
+      if (element.image_data) {
+        const img = new Image();
+        img.onload = () => {
+          // Redraw the canvas when image loads
+          this.drawCurrentScene();
+        };
+        img.src = element.image_data;
+        
+        // Use the element's actual dimensions for video snapshots
+        const actualWidth = element.width || imgWidth;
+        const actualHeight = element.height || imgHeight;
+        
+        // Draw the image at its specified size
+        ctx.drawImage(img, x - actualWidth/2, y - actualHeight/2, actualWidth, actualHeight);
+        
+        // Add a very subtle border to indicate it's a video snapshot
+        ctx.strokeStyle = 'rgba(16, 185, 129, 0.3)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x - actualWidth/2, y - actualHeight/2, actualWidth, actualHeight);
+      } else {
+        // Fallback for video snapshots without data
+        const actualWidth = element.width || imgWidth;
+        const actualHeight = element.height || imgHeight;
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.3)';
+        ctx.fillRect(x - actualWidth/2, y - actualHeight/2, actualWidth, actualHeight);
+        ctx.fillStyle = '#000000';
+        ctx.font = '24px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🎬', x, y - 15);
+        ctx.font = '14px Arial';
+        ctx.fillText('Video Frame', x, y + 15);
+      }
     } else {
-      ctx.fillStyle = '#e5e7eb';
-      ctx.fillRect(x - imgWidth/2, y - imgHeight/2, imgWidth, imgHeight);
+      // Regular image element - use placeholder or actual image
+      if (this.scenePlaceholderLoaded) {
+        ctx.drawImage(this.scenePlaceholderImage, x - imgWidth/2, y - imgHeight/2, imgWidth, imgHeight);
+      } else {
+        ctx.fillStyle = '#e5e7eb';
+        ctx.fillRect(x - imgWidth/2, y - imgHeight/2, imgWidth, imgHeight);
+      }
     }
   }
   
@@ -1207,6 +1493,17 @@ class CoursePlayer extends React.Component {
     this.nextSection();
   }
 
+  getCurrentScene = () => {
+    const { currentSection, currentScene } = this.state;
+    const section = this.state.course.sections[currentSection];
+    if (section && section.scenes && section.scenes[currentScene]) {
+      return section.scenes[currentScene];
+    }
+    return null;
+  }
+
+
+
   nextSection = () => {
     const { currentSection } = this.state;
     const { course } = this.props;
@@ -1278,14 +1575,6 @@ class CoursePlayer extends React.Component {
           <p className="text-gray-600">{course.description}</p>
           
           <div className="flex mt-4 gap-2">
-            {this.state.role === 'learner' && (
-              <button 
-                onClick={this.toggleVideoMode}
-                className={`px-4 py-2 rounded ${videoMode ? 'bg-red-500 text-white' : 'bg-blue-500 text-white'}`}
-              >
-                {videoMode ? 'Exit Video Mode' : 'Play as Video'}
-              </button>
-            )}
             <button
               onClick={() => {
                 const next = !this.state.voiceOverEnabled;
@@ -1300,42 +1589,13 @@ class CoursePlayer extends React.Component {
           </div>
         </div>
         
-        {videoMode ? (
-          <div className="video-player mb-6">
-            <div className="bg-black rounded-lg overflow-hidden relative">
-              <canvas 
-                ref={this.videoCanvasRef}
-                width={1280}
-                height={720}
-                className="w-full"
-              />
-              
-              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black to-transparent p-4">
-                <div className="w-full bg-gray-700 rounded-full h-2 mb-3">
-                  <div
-                    className="bg-red-500 h-2 rounded-full transition-all duration-300"
-                    style={{ width: `${videoProgress}%` }}
-                  />
-                </div>
-                
-                <div className="flex items-center justify-between px-4">
-                  <div className="text-white text-sm">
-                    Scene {Math.min(totalScenes, Math.floor(videoProgress / 100 * totalScenes) + 1)} of {totalScenes}
-                  </div>
-                  <button
-                    onClick={this.toggleVideoMode}
-                    className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded transition-colors"
-                  >
-                    Stop
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="player-main grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="player-main grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="md:col-span-2">
-              <div className="player-canvas-container bg-gray-900 rounded-lg overflow-hidden relative">
+              <div 
+                className="player-canvas-container bg-gray-900 rounded-lg overflow-hidden relative"
+                onMouseEnter={() => this.setState({ isCanvasHovered: true })}
+                onMouseLeave={() => this.setState({ isCanvasHovered: false })}
+              >
                 <canvas 
                   ref={this.canvasRef}
                   width={1280}
@@ -1343,7 +1603,7 @@ class CoursePlayer extends React.Component {
                   className="w-full"
                 />
                 
-                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black to-transparent p-4">
+                <div className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black to-transparent p-4 transition-opacity duration-300 ${this.state.isCanvasHovered ? 'opacity-100' : 'opacity-0'}`}>
                   <div className="w-full bg-gray-700 rounded-full h-2 mb-3">
                     <div
                       className="bg-blue-500 h-2 rounded-full transition-all duration-300"
@@ -1536,7 +1796,8 @@ function mountCoursePlayer(courseData, containerId, onCourseUpdate, options) {
       React.createElement(CoursePlayer, { 
         course: courseData,
         onCourseUpdate: onCourseUpdate,
-        role: options && options.role ? options.role : 'learner'
+        role: options && options.role ? options.role : 'learner',
+        videoUrl: options && options.videoUrl ? options.videoUrl : null
       }),
       container
     );

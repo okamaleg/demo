@@ -405,6 +405,7 @@
                         </div>
                     </div>
                     
+                    
                     <!-- React Course Player will be mounted here -->
                     <div id="coursePlayerContainer" class="mt-4"></div>
                     
@@ -412,6 +413,7 @@
                     <div id="courseSections" class="mt-4">
                         <!-- Sections will be inserted here -->
                     </div>
+                    
                 </div>
             </div>
         </div>
@@ -424,6 +426,9 @@
     <!-- Load the React Course Player -->
     <script src="/js/react-course-player.js" type="text/babel"></script>
     <script src="/js/block-course-player.js" type="text/babel"></script>
+    
+    <!-- Load the Smart Content Enhancement Component -->
+    <script src="/js/smart-content-enhancer.js" type="text/babel"></script>
 
     <script>
         // Global variables
@@ -508,6 +513,7 @@
                 checkVideoStatus(currentVideoId);
             }
         });
+
 
         // Start periodic status checking
         function startStatusCheck() {
@@ -659,6 +665,9 @@
                 }
                 
                 if (hasScenes) {
+                    // Get video URL from current video ID
+                    const videoUrl = currentVideoId ? `/video/${currentVideoId}` : null;
+                    
                     // Mount Dual Course Player to enable Scenes/Blocks switch
                     if (typeof mountDualCoursePlayer === 'function') {
                         mountDualCoursePlayer(
@@ -669,7 +678,7 @@
                                 currentCourse = updatedCourse;
                                 saveCourse(currentCourseId, updatedCourse);
                             },
-                            { role: 'author', view: 'scene' }
+                            { role: 'author', view: 'scene', videoUrl: videoUrl }
                         );
                     } else {
                         mountCoursePlayer(
@@ -679,7 +688,7 @@
                                 currentCourse = updatedCourse;
                                 saveCourse(currentCourseId, updatedCourse);
                             },
-                            { role: 'author' }
+                            { role: 'author', videoUrl: videoUrl }
                         );
                     }
                     courseSections.style.display = 'none'; // Hide traditional display

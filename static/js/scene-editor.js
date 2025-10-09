@@ -88,6 +88,7 @@ class SceneEditor extends React.Component {
   }
 
   componentDidUpdate(prevProps, prevState) {
+    // Update scene if props changed (sync with course player)
     if (prevProps.scene !== this.props.scene && this.props.scene) {
       this.setState({
         scene: this.props.scene,
@@ -95,7 +96,23 @@ class SceneEditor extends React.Component {
         keyPhrase: this.getKeyPhrase(this.props.scene.narration)
       }, () => {
         this.drawPreview();
+        this.mountSmartContentEnhancer();
       });
+    }
+    
+    // Sync with course player if available
+    if (this.props.coursePlayer && this.props.sectionIndex !== undefined && this.props.sceneIndex !== undefined) {
+      const currentScene = this.props.coursePlayer.getCurrentScene();
+      if (currentScene && currentScene !== this.state.scene) {
+        this.setState({
+          scene: currentScene,
+          duration: currentScene.duration || 3.0,
+          keyPhrase: this.getKeyPhrase(currentScene.narration)
+        }, () => {
+          this.drawPreview();
+          this.mountSmartContentEnhancer();
+        });
+      }
     }
 
     if (prevState.previewMode !== this.state.previewMode && this.state.previewMode) {
@@ -104,6 +121,14 @@ class SceneEditor extends React.Component {
       if (this.animationRef) {
         cancelAnimationFrame(this.animationRef);
       }
+    }
+
+    // Mount smart content enhancer when narration changes
+    if (prevState.scene?.narration !== this.state.scene?.narration) {
+      // Add a small delay to ensure DOM is updated
+      setTimeout(() => {
+        this.mountSmartContentEnhancer();
+      }, 100);
     }
   }
 
@@ -119,6 +144,37 @@ class SceneEditor extends React.Component {
     return words.length > 8 ? words.slice(0, 5).join(' ') + '...' : text.substring(0, 50);
   }
 
+  calculateSmartDuration() {
+    const narration = this.state.scene?.narration || '';
+    if (!narration.trim()) return 3; // Default 3 seconds for empty content
+    
+    // Calculate based on word count and reading speed
+    const words = narration.trim().split(/\s+/).length;
+    const characters = narration.length;
+    
+    // Base calculation: ~140 words per minute = ~0.43 seconds per word
+    let baseDuration = Math.max(3, Math.round(words * 0.43));
+    
+    // Adjust for content complexity
+    const visualElements = this.state.scene?.visual_elements?.length || 0;
+    const hasComplexWords = /[A-Z]{3,}|[0-9]+|\.{2,}|!{2,}|\?{2,}/.test(narration);
+    
+    // Add time for visual elements (up to 4 seconds)
+    baseDuration += Math.min(4, Math.floor(visualElements / 2));
+    
+    // Add time for complex content (up to 3 seconds)
+    if (hasComplexWords) {
+      baseDuration += Math.min(3, Math.floor(words / 20));
+    }
+    
+    // Add time for punctuation pauses
+    const punctuationCount = (narration.match(/[.!?]/g) || []).length;
+    baseDuration += Math.min(2, punctuationCount * 0.3);
+    
+    // Clamp to reasonable bounds
+    return Math.max(3, Math.min(30, baseDuration));
+  }
+
   handleNarrationChange = (e) => {
     const narration = e.target.value;
     this.setState(prevState => ({
@@ -130,9 +186,190 @@ class SceneEditor extends React.Component {
     }));
   }
 
-  handleDurationChange = (e) => {
-    this.setState({ duration: parseFloat(e.target.value) });
+  mountSmartContentEnhancer = () => {
+    console.log('Attempting to mount smart content enhancer...');
+    console.log('mountSmartContentEnhancer function available:', typeof mountSmartContentEnhancer === 'function');
+    console.log('Scene narration:', this.state.scene?.narration);
+    
+    // Mount the smart content enhancer if the function is available
+    if (typeof mountSmartContentEnhancer === 'function' && this.state.scene?.narration) {
+      const container = document.getElementById('smart-content-enhancer-container');
+      console.log('Container found:', !!container);
+      
+      if (container) {
+        // Clear any existing content
+        container.innerHTML = '';
+        
+        console.log('Mounting smart content enhancer...');
+        mountSmartContentEnhancer('smart-content-enhancer-container', {
+          text: this.state.scene.narration,
+          contentType: 'narration',
+          autoAnalyze: true,
+          onTextChange: (newText) => {
+            console.log('Text changed to:', newText);
+            this.setState(prevState => ({
+              scene: {
+                ...prevState.scene,
+                narration: newText
+              }
+            }));
+          },
+          onAnalysisComplete: (analysis) => {
+            console.log('Content analysis completed:', analysis);
+          }
+        });
+      }
+    }
   }
+
+  // Canvas mouse event handlers
+  handleCanvasMouseDown = (e) => {
+    if (this.state.previewMode) return;
+    
+    const rect = this.canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    // Check if clicking on an existing element
+    const clickedElementIndex = this.getElementIndexAtPosition(x, y);
+    if (clickedElementIndex !== -1) {
+      const clickedElement = this.state.scene.visual_elements[clickedElementIndex];
+      
+      // Start dragging
+      this.setState({ 
+        draggingElement: clickedElementIndex,
+        selectedElement: clickedElementIndex,
+        showElementPanel: true,
+        dragStartX: x,
+        dragStartY: y
+      });
+      return;
+    }
+    
+    // Add new element at click position
+    this.addVisualElement(this.state.newElementType, x, y);
+  }
+
+  getElementAtPosition = (x, y) => {
+    if (!this.state.scene.visual_elements) return null;
+    
+    // Iterate through elements in reverse order (top elements first)
+    for (let i = this.state.scene.visual_elements.length - 1; i >= 0; i--) {
+      const element = this.state.scene.visual_elements[i];
+      
+      // Check if click is within element bounds
+      const elementX = element.x || 400;
+      const elementY = element.y || 225;
+      
+      const hitSize = this.getElementHitSize(element);
+      const halfWidth = hitSize.width / 2;
+      const halfHeight = hitSize.height / 2;
+      
+      if (x >= elementX - halfWidth && x <= elementX + halfWidth &&
+          y >= elementY - halfHeight && y <= elementY + halfHeight) {
+        return element;
+      }
+    }
+    
+    return null;
+  }
+
+  getElementIndexAtPosition = (x, y) => {
+    if (!this.state.scene.visual_elements) return -1;
+    
+    // Iterate through elements in reverse order (top elements first)
+    for (let i = this.state.scene.visual_elements.length - 1; i >= 0; i--) {
+      const element = this.state.scene.visual_elements[i];
+      
+      // Check if click is within element bounds
+      const elementX = element.x || 400;
+      const elementY = element.y || 225;
+      
+      const hitSize = this.getElementHitSize(element);
+      const halfWidth = hitSize.width / 2;
+      const halfHeight = hitSize.height / 2;
+      
+      if (x >= elementX - halfWidth && x <= elementX + halfWidth &&
+          y >= elementY - halfHeight && y <= elementY + halfHeight) {
+        return i;
+      }
+    }
+    
+    return -1;
+  }
+
+  getElementHitSize = (element) => {
+    // Define hit box sizes for different element types
+    switch (element.type) {
+      case 'avatar':
+        return { width: 80, height: 80 };
+      case 'image':
+        if (element.is_video_snapshot) {
+          return { width: element.width || 600, height: element.height || 400 };
+        }
+        return { width: 200, height: 150 };
+      case 'text':
+        const textWidth = element.content ? element.content.length * 10 : 100;
+        return { width: Math.max(textWidth, 100), height: 50 };
+      case 'shape':
+        return { width: element.width || 100, height: element.height || 100 };
+      default:
+        return { width: 100, height: 100 };
+    }
+  }
+
+  handleCanvasDoubleClick = (e) => {
+    if (this.state.previewMode) return;
+    
+    const rect = this.canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    // Add new element at double-click position
+    this.addVisualElement(this.state.newElementType, x, y);
+  }
+
+  handleCanvasMouseMove = (e) => {
+    if (!this.state.draggingElement) return;
+    
+    const rect = this.canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    // Update the position of the dragged element
+    const elementPositions = { ...this.state.elementPositions };
+    elementPositions[this.state.draggingElement] = { x, y };
+    
+    this.setState({ elementPositions }, () => {
+      this.drawPreview();
+    });
+  }
+
+  handleCanvasMouseUp = (e) => {
+    if (this.state.draggingElement !== null) {
+      // Save the final position to the element
+      const elementPositions = { ...this.state.elementPositions };
+      const finalPosition = elementPositions[this.state.draggingElement];
+      
+      if (finalPosition) {
+        // Update the element's stored position
+        const updatedElements = [...this.state.scene.visual_elements];
+        updatedElements[this.state.draggingElement] = {
+          ...updatedElements[this.state.draggingElement],
+          x: finalPosition.x,
+          y: finalPosition.y
+        };
+        
+        this.setState({
+          scene: { ...this.state.scene, visual_elements: updatedElements },
+          draggingElement: null
+        });
+      } else {
+        this.setState({ draggingElement: null });
+      }
+    }
+  }
+
 
   handleSceneTypeChange = (type) => {
     this.setState(prevState => ({
@@ -195,10 +432,11 @@ class SceneEditor extends React.Component {
   }
 
   saveScene = () => {
-    const { scene, duration, keyPhrase } = this.state;
+    const { scene, keyPhrase } = this.state;
+    const smartDuration = this.calculateSmartDuration();
     const updatedScene = {
       ...scene,
-      duration,
+      duration: smartDuration,
       keyPhrase,
       visual_elements: scene.visual_elements // Include the updated visual elements with custom positions
     };
@@ -502,41 +740,132 @@ class SceneEditor extends React.Component {
       this.drawPreview();
     });
   };
+
+  removeElement = (elementIndex) => {
+    if (elementIndex === null || elementIndex === undefined) return;
+    
+    const updatedElements = [...this.state.scene.visual_elements];
+    updatedElements.splice(elementIndex, 1);
+    
+    this.setState({
+      scene: {
+        ...this.state.scene,
+        visual_elements: updatedElements
+      },
+      selectedElement: null,
+      showElementPanel: false
+    }, () => {
+      this.drawPreview();
+    });
+  };
+
+  addVisualElement = (type, x, y) => {
+    const newElement = {
+      type: type,
+      x: x,
+      y: y,
+      id: Date.now() // Simple ID generation
+    };
+
+    // Set default properties based on type
+    switch (type) {
+      case 'avatar':
+        newElement.emotion = 'serious';
+        newElement.hairColor = '#8B4513';
+        newElement.shirtColor = '#4A90E2';
+        break;
+      case 'text':
+        newElement.content = 'New text element';
+        newElement.style = 'normal';
+        break;
+      case 'shape':
+        newElement.shape_type = 'rectangle';
+        break;
+      case 'image':
+        newElement.description = 'New image';
+        newElement.style = 'photo';
+        break;
+      case 'video_snapshot':
+        newElement.type = 'image';
+        newElement.is_video_snapshot = true;
+        newElement.width = 600;
+        newElement.height = 400;
+        newElement.description = 'Video Snapshot';
+        newElement.image_data = null;
+        break;
+    }
+
+    const updatedElements = [...this.state.scene.visual_elements, newElement];
+    this.setState({
+      scene: {
+        ...this.state.scene,
+        visual_elements: updatedElements
+      }
+    }, () => {
+      this.drawPreview();
+    });
+  };
+
+  addVideoSnapshot = () => {
+    // Create a placeholder video snapshot
+    const newSnapshot = {
+      type: 'image',
+      x: 400,
+      y: 225,
+      is_video_snapshot: true,
+      width: 600,
+      height: 400,
+      description: 'Video Snapshot',
+      image_data: null, // Will be populated when actual video is processed
+      id: Date.now()
+    };
+
+    const updatedElements = [...this.state.scene.visual_elements, newSnapshot];
+    this.setState({
+      scene: {
+        ...this.state.scene,
+        visual_elements: updatedElements
+      }
+    }, () => {
+      this.drawPreview();
+    });
+  };
   
   drawPreview() {
     const canvas = this.canvasRef.current;
     if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
-    const { width, height } = canvas;
+    const width = 800;
+    const height = 450;
     
     // Clear canvas
     ctx.clearRect(0, 0, width, height);
     
-    // Get scene type colors
-    const bgColors = this.getBackgroundColors(this.state.scene.scene_type);
-    
-    // Draw background gradient
+    // Draw gradient background (same as course player)
     const gradient = ctx.createLinearGradient(0, 0, width, height);
-    gradient.addColorStop(0, bgColors[0]);
-    gradient.addColorStop(1, bgColors[1]);
+    gradient.addColorStop(0, '#3b82f6');
+    gradient.addColorStop(1, '#2563eb');
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
     
-    // Draw visual elements
+    // Draw visual elements using unified system
     if (this.state.scene.visual_elements) {
       this.state.scene.visual_elements.forEach((element, index) => {
         // Check if this element has a custom position from dragging
         const customPos = this.state.elementPositions[index];
+        const isSelected = index === this.state.selectedElement;
+        const isDragging = index === this.state.draggingElement;
+        
         if (customPos) {
           // Draw with custom position
-          this.drawElementAt(ctx, customPos.x, customPos.y, element, index === this.state.selectedElement);
+          this.drawElementAt(ctx, customPos.x, customPos.y, element, isSelected, isDragging);
         } else if (element.customX !== undefined && element.customY !== undefined) {
           // Use stored custom coordinates
-          this.drawElementAt(ctx, element.customX, element.customY, element, index === this.state.selectedElement);
+          this.drawElementAt(ctx, element.customX, element.customY, element, isSelected, isDragging);
         } else {
           // Use standard positioning
-          this.drawElement(ctx, width, height, element, index === this.state.selectedElement);
+          this.drawElement(ctx, width, height, element, isSelected, isDragging);
         }
       });
     }
@@ -563,12 +892,17 @@ class SceneEditor extends React.Component {
     }
   }
 
-  drawElement(ctx, width, height, element, isSelected = false) {
-    const position = this.getPositionCoordinates(element.position || 'center', width, height);
-    this.drawElementAt(ctx, position.x, position.y, element, isSelected);
+  drawElement(ctx, width, height, element, isSelected = false, isDragging = false) {
+    // Use actual coordinates if available, otherwise use position string
+    if (element.x !== undefined && element.y !== undefined) {
+      this.drawElementAt(ctx, element.x, element.y, element, isSelected, isDragging);
+    } else {
+      const position = this.getPositionCoordinates(element.position || 'center', width, height);
+      this.drawElementAt(ctx, position.x, position.y, element, isSelected, isDragging);
+    }
   }
   
-  drawElementAt(ctx, x, y, element, isSelected = false) {
+  drawElementAt(ctx, x, y, element, isSelected = false, isDragging = false) {
     // Draw selection indicator if element is selected
     if (isSelected) {
       ctx.save();
@@ -578,47 +912,199 @@ class SceneEditor extends React.Component {
       const hitSize = this.getElementHitSize(element);
       ctx.strokeRect(x - hitSize.width/2 - 5, y - hitSize.height/2 - 5, hitSize.width + 10, hitSize.height + 10);
       
+      // Add resize handles for video snapshots
+      if (element.is_video_snapshot) {
+        this.drawResizeHandles(ctx, x - hitSize.width/2 - 5, y - hitSize.height/2 - 5, hitSize.width + 10, hitSize.height + 10);
+      }
+      
+      ctx.restore();
+    }
+    
+    // Draw dragging indicator
+    if (isDragging) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(0, 191, 255, 0.3)';
+      const hitSize = this.getElementHitSize(element);
+      ctx.fillRect(x - hitSize.width/2 - 10, y - hitSize.height/2 - 10, hitSize.width + 20, hitSize.height + 20);
       ctx.restore();
     }
     
     switch (element.type) {
       case 'avatar':
-        this.drawAvatarAt(ctx, x, y, element);
+        this.drawAvatarAt(ctx, x, y, element, isSelected, isDragging);
         break;
       case 'text':
-        this.drawTextAt(ctx, x, y, element);
+        this.drawTextAt(ctx, x, y, element, isSelected, isDragging);
         break;
       case 'image':
-        this.drawImageAt(ctx, x, y, element);
+        this.drawImageAt(ctx, x, y, element, isSelected, isDragging);
         break;
       case 'shape':
-        this.drawShapeAt(ctx, x, y, element);
+        this.drawShapeAt(ctx, x, y, element, isSelected, isDragging);
         break;
     }
   }
 
   // ----- Drawing helpers for absolute positions -----
-  drawAvatarAt(ctx, x, y, element) {
+  drawAvatarAt(ctx, x, y, element, isSelected = false, isDragging = false) {
     const avatarSize = 120;
-    // Background circle
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+    
+    // Draw avatar background circle
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
     ctx.beginPath();
     ctx.arc(x, y, avatarSize / 2, 0, Math.PI * 2);
     ctx.fill();
-    // Emoji
-    ctx.font = `${avatarSize * 0.6}px Arial`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const emoji = element.emoji || (element.emotion === 'happy' ? '😊' : element.emotion === 'serious' ? '😐' : element.emotion === 'thoughtful' ? '🤔' : '👤');
-    ctx.fillText(emoji, x, y);
+    
+    // Draw selection indicator
+    if (isSelected) {
+      ctx.strokeStyle = '#00BFFF';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(x, y, avatarSize / 2 + 5, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    
+    // Draw dragging indicator
+    if (isDragging) {
+      ctx.fillStyle = 'rgba(0, 191, 255, 0.3)';
+      ctx.beginPath();
+      ctx.arc(x, y, avatarSize / 2 + 10, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    
+    // Draw human avatar (static version for editor)
+    this.drawHumanAvatar(ctx, x, y, avatarSize, element, false);
   }
 
-  drawTextAt(ctx, x, y, element) {
+  drawHumanAvatar = (ctx, x, y, size, element, isSpeaking) => {
+    const scale = size / 100;
+    
+    // Face
+    ctx.fillStyle = '#FDBCB4'; // Skin tone
+    ctx.beginPath();
+    ctx.arc(x, y - 5, 35 * scale, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Hair
+    ctx.fillStyle = element.hairColor || '#8B4513';
+    ctx.beginPath();
+    ctx.arc(x, y - 15, 40 * scale, Math.PI, 0);
+    ctx.fill();
+    
+    // Eyes
+    ctx.fillStyle = '#000000';
+    ctx.beginPath();
+    ctx.arc(x - 12 * scale, y - 10, 3 * scale, 0, Math.PI * 2);
+    ctx.arc(x + 12 * scale, y - 10, 3 * scale, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Eye highlights
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(x - 11 * scale, y - 11, 1 * scale, 0, Math.PI * 2);
+    ctx.arc(x + 13 * scale, y - 11, 1 * scale, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Eyebrows
+    ctx.strokeStyle = element.hairColor || '#8B4513';
+    ctx.lineWidth = 2 * scale;
+    ctx.beginPath();
+    ctx.moveTo(x - 18 * scale, y - 18);
+    ctx.lineTo(x - 6 * scale, y - 16);
+    ctx.moveTo(x + 6 * scale, y - 16);
+    ctx.lineTo(x + 18 * scale, y - 18);
+    ctx.stroke();
+    
+    // Nose
+    ctx.fillStyle = '#E8A87C';
+    ctx.beginPath();
+    ctx.arc(x, y - 2, 2 * scale, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Mouth with emotion (static for editor)
+    this.drawMouth(ctx, x, y + 8, scale, false, element.emotion);
+    
+    // Body/shirt
+    ctx.fillStyle = element.shirtColor || '#4A90E2';
+    ctx.fillRect(x - 25 * scale, y + 25, 50 * scale, 40 * scale);
+    
+    // Arms
+    ctx.fillStyle = '#FDBCB4';
+    ctx.fillRect(x - 35 * scale, y + 30, 15 * scale, 25 * scale);
+    ctx.fillRect(x + 20 * scale, y + 30, 15 * scale, 25 * scale);
+  }
+
+  drawMouth = (ctx, x, y, scale, isSpeaking, emotion) => {
+    ctx.fillStyle = '#8B0000'; // Lip color
+    
+    if (isSpeaking) {
+      // Animated speaking mouth
+      const time = Date.now() * 0.01;
+      const mouthOpenness = Math.sin(time) * 0.5 + 0.5;
+      
+      // Open mouth for speaking
+      ctx.beginPath();
+      ctx.ellipse(x, y, 8 * scale, 4 * scale * mouthOpenness, 0, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Teeth
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.ellipse(x, y, 6 * scale, 2 * scale * mouthOpenness, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // Closed mouth with emotion
+      switch (emotion) {
+        case 'happy':
+          // Smile
+          ctx.beginPath();
+          ctx.arc(x, y - 2, 8 * scale, 0, Math.PI);
+          ctx.stroke();
+          break;
+        case 'serious':
+          // Straight line
+          ctx.beginPath();
+          ctx.moveTo(x - 6 * scale, y);
+          ctx.lineTo(x + 6 * scale, y);
+          ctx.stroke();
+          break;
+        case 'thoughtful':
+          // Slight frown
+          ctx.beginPath();
+          ctx.arc(x, y + 2, 8 * scale, Math.PI, 0);
+          ctx.stroke();
+          break;
+        default:
+          // Neutral mouth
+          ctx.beginPath();
+          ctx.moveTo(x - 4 * scale, y);
+          ctx.lineTo(x + 4 * scale, y);
+          ctx.stroke();
+      }
+    }
+  }
+
+  drawTextAt(ctx, x, y, element, isSelected = false, isDragging = false) {
     const content = element.content || 'Text content';
     const maxWidth = 300;
+    
+    // Draw selection indicator
+    if (isSelected) {
+      ctx.strokeStyle = '#00BFFF';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x - maxWidth/2 - 5, y - 25, maxWidth + 10, 50);
+    }
+    
+    // Draw dragging indicator
+    if (isDragging) {
+      ctx.fillStyle = 'rgba(0, 191, 255, 0.3)';
+      ctx.fillRect(x - maxWidth/2 - 10, y - 30, maxWidth + 20, 60);
+    }
+    
     // Background
     ctx.fillStyle = 'rgba(255, 243, 205, 0.8)';
     ctx.fillRect(x - maxWidth/2, y - 20, maxWidth, 40);
+    
     // Text
     ctx.font = this.getTextFontByStyle(element.style);
     ctx.fillStyle = '#000000';
@@ -627,23 +1113,134 @@ class SceneEditor extends React.Component {
     ctx.fillText(content, x, y);
   }
 
-  drawImageAt(ctx, x, y, element) {
-    const imgWidth = 200;
-    const imgHeight = 150;
-    ctx.fillStyle = '#c3e6cb';
-    ctx.fillRect(x - imgWidth/2, y - imgHeight/2, imgWidth, imgHeight);
-    ctx.font = '24px Arial';
-    ctx.fillStyle = '#000000';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('🖼️', x, y - 15);
-    ctx.font = '14px Arial';
-    const description = element.description || 'Image';
-    const truncated = description.length > 30 ? description.substring(0, 27) + '...' : description;
-    ctx.fillText(truncated, x, y + 15);
+  drawImageAt(ctx, x, y, element, isSelected = false, isDragging = false) {
+    const imgWidth = element.width || 200;
+    const imgHeight = element.height || 150;
+    
+    // Draw selection indicator
+    if (isSelected) {
+      ctx.strokeStyle = '#00BFFF';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x - imgWidth/2 - 5, y - imgHeight/2 - 5, imgWidth + 10, imgHeight + 10);
+    }
+    
+    // Draw dragging indicator
+    if (isDragging) {
+      ctx.fillStyle = 'rgba(0, 191, 255, 0.3)';
+      ctx.fillRect(x - imgWidth/2 - 10, y - imgHeight/2 - 10, imgWidth + 20, imgHeight + 20);
+    }
+    
+    // Check if this is a video snapshot (main visual element)
+    if (element.is_video_snapshot) {
+      // Draw the actual video snapshot (large, main element)
+      if (element.image_data) {
+        // Use the element's actual dimensions for video snapshots
+        const actualWidth = element.width || imgWidth;
+        const actualHeight = element.height || imgHeight;
+        
+        // Try to draw the image if it's already loaded
+        const img = new Image();
+        img.onload = () => {
+          // Clear the placeholder and draw the actual image
+          ctx.clearRect(x - actualWidth/2, y - actualHeight/2, actualWidth, actualHeight);
+          ctx.drawImage(img, x - actualWidth/2, y - actualHeight/2, actualWidth, actualHeight);
+          
+          // Add a subtle border to indicate it's a video snapshot
+          ctx.strokeStyle = '#10b981';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x - actualWidth/2, y - actualHeight/2, actualWidth, actualHeight);
+          
+          // Add video icon overlay (smaller, less intrusive)
+          ctx.fillStyle = 'rgba(16, 185, 129, 0.7)';
+          ctx.fillRect(x + actualWidth/2 - 20, y - actualHeight/2, 20, 20);
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '12px Arial';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('🎬', x + actualWidth/2 - 10, y - actualHeight/2 + 10);
+        };
+        img.onerror = () => {
+          console.error('Failed to load image:', element.image_data);
+        };
+        img.src = element.image_data;
+        
+        // Draw placeholder while image loads
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.3)';
+        ctx.fillRect(x - actualWidth/2, y - actualHeight/2, actualWidth, actualHeight);
+        ctx.fillStyle = '#000000';
+        ctx.font = '24px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🎬', x, y);
+        ctx.font = '14px Arial';
+        ctx.fillText('Loading...', x, y + 20);
+      } else {
+        // Fallback for video snapshots without data
+        const actualWidth = element.width || imgWidth;
+        const actualHeight = element.height || imgHeight;
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.3)';
+        ctx.fillRect(x - actualWidth/2, y - actualHeight/2, actualWidth, actualHeight);
+        ctx.fillStyle = '#000000';
+        ctx.font = '24px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🎬', x, y - 15);
+        ctx.font = '14px Arial';
+        ctx.fillText('Video Frame', x, y + 15);
+      }
+    } else {
+      // Regular image element
+      ctx.fillStyle = '#c3e6cb';
+      ctx.fillRect(x - imgWidth/2, y - imgHeight/2, imgWidth, imgHeight);
+      ctx.font = '24px Arial';
+      ctx.fillStyle = '#000000';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('🖼️', x, y - 15);
+      ctx.font = '14px Arial';
+      const description = element.description || 'Image';
+      const truncated = description.length > 30 ? description.substring(0, 27) + '...' : description;
+      ctx.fillText(truncated, x, y + 15);
+    }
   }
 
-  drawShapeAt(ctx, x, y, element) {
+  drawResizeHandles(ctx, x, y, width, height) {
+    const handleSize = 8;
+    const handles = [
+      { x: x, y: y }, // top-left
+      { x: x + width/2, y: y }, // top-center
+      { x: x + width, y: y }, // top-right
+      { x: x + width, y: y + height/2 }, // right-center
+      { x: x + width, y: y + height }, // bottom-right
+      { x: x + width/2, y: y + height }, // bottom-center
+      { x: x, y: y + height }, // bottom-left
+      { x: x, y: y + height/2 } // left-center
+    ];
+    
+    ctx.fillStyle = '#00BFFF';
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    
+    handles.forEach(handle => {
+      ctx.fillRect(handle.x - handleSize/2, handle.y - handleSize/2, handleSize, handleSize);
+      ctx.strokeRect(handle.x - handleSize/2, handle.y - handleSize/2, handleSize, handleSize);
+    });
+  }
+
+  drawShapeAt(ctx, x, y, element, isSelected = false, isDragging = false) {
+    // Draw selection indicator
+    if (isSelected) {
+      ctx.strokeStyle = '#00BFFF';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x - 50, y - 30, 100, 60);
+    }
+    
+    // Draw dragging indicator
+    if (isDragging) {
+      ctx.fillStyle = 'rgba(0, 191, 255, 0.3)';
+      ctx.fillRect(x - 55, y - 35, 110, 70);
+    }
+    
     ctx.fillStyle = 'rgba(220, 53, 69, 0.3)';
     ctx.strokeStyle = 'rgba(220, 53, 69, 0.7)';
     ctx.lineWidth = 2;
@@ -822,7 +1419,7 @@ class SceneEditor extends React.Component {
     
     const ctx = canvas.getContext('2d');
     const startTime = Date.now();
-    const duration = this.state.duration * 1000; // convert to ms
+    const duration = this.calculateSmartDuration() * 1000; // convert to ms
     const animation = this.state.selectedAnimation;
     
     const animate = () => {
@@ -989,7 +1586,8 @@ class SceneEditor extends React.Component {
       { id: 'avatar', label: 'Avatar' },
       { id: 'text', label: 'Text' },
       { id: 'image', label: 'Image' },
-      { id: 'shape', label: 'Shape' }
+      { id: 'shape', label: 'Shape' },
+      { id: 'video_snapshot', label: 'Video Snapshot' }
     ];
     
     // Get the selected element if any
@@ -1032,7 +1630,7 @@ class SceneEditor extends React.Component {
           </div>
           <div className="flex items-center mb-2 text-sm">
             <span className="text-gray-600">
-              <strong>Tip:</strong> Double-click to add a new {newElementType}. Click and drag elements to reposition them.
+              <strong>Tip:</strong> Video snapshots are the main visual element. Add avatars, text, and shapes around them to enhance learning.
             </span>
           </div>
           <div className="relative bg-gray-900 rounded-lg overflow-hidden">
@@ -1040,7 +1638,11 @@ class SceneEditor extends React.Component {
               ref={this.canvasRef}
               width={800}
               height={450}
-              className="w-full"
+              className="w-full cursor-crosshair"
+              onMouseDown={this.handleCanvasMouseDown}
+              onMouseMove={this.handleCanvasMouseMove}
+              onMouseUp={this.handleCanvasMouseUp}
+              onDoubleClick={this.handleCanvasDoubleClick}
             />
           </div>
         </div>
@@ -1062,21 +1664,46 @@ class SceneEditor extends React.Component {
             {selectedElementData.type === 'avatar' && (
               <div className="space-y-3">
                 <div>
-                  <label className="block text-sm font-medium mb-1">Avatar Style</label>
-                  <div className="grid grid-cols-4 gap-2">
-                    {avatars.map(avatar => (
-                      <button
-                        key={avatar.emoji}
-                        className={`py-2 px-3 text-center text-2xl rounded ${
-                          selectedElementData.emoji === avatar.emoji ? 
-                          'bg-blue-100 border-2 border-blue-500' : 'bg-white border'
-                        }`}
-                        onClick={() => this.updateElementProperty('emoji', avatar.emoji)}
-                      >
-                        {avatar.emoji}
-                      </button>
-                    ))}
-                  </div>
+                  <label className="block text-sm font-medium mb-1">Avatar Emotion</label>
+                  <select 
+                    className="w-full p-2 border rounded"
+                    value={selectedElementData.emotion || 'serious'}
+                    onChange={(e) => this.updateElementProperty('emotion', e.target.value)}
+                  >
+                    <option value="happy">Happy</option>
+                    <option value="serious">Serious</option>
+                    <option value="thoughtful">Thoughtful</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Hair Color</label>
+                  <select 
+                    className="w-full p-2 border rounded"
+                    value={selectedElementData.hairColor || '#8B4513'}
+                    onChange={(e) => this.updateElementProperty('hairColor', e.target.value)}
+                  >
+                    <option value="#8B4513">Brown</option>
+                    <option value="#654321">Dark Brown</option>
+                    <option value="#2F4F4F">Dark Slate Gray</option>
+                    <option value="#DAA520">Golden</option>
+                    <option value="#000000">Black</option>
+                    <option value="#FFB6C1">Blonde</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Shirt Color</label>
+                  <select 
+                    className="w-full p-2 border rounded"
+                    value={selectedElementData.shirtColor || '#4A90E2'}
+                    onChange={(e) => this.updateElementProperty('shirtColor', e.target.value)}
+                  >
+                    <option value="#4A90E2">Blue</option>
+                    <option value="#2E8B57">Sea Green</option>
+                    <option value="#8B0000">Dark Red</option>
+                    <option value="#FF6347">Tomato</option>
+                    <option value="#9370DB">Purple</option>
+                    <option value="#32CD32">Lime Green</option>
+                  </select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">Emotion</label>
@@ -1147,6 +1774,45 @@ class SceneEditor extends React.Component {
                     <option value="diagram">Diagram</option>
                   </select>
                 </div>
+                {selectedElementData.is_video_snapshot && (
+                  <div className="space-y-3 border-t pt-3">
+                    <h4 className="font-medium text-blue-600">Video Snapshot Settings</h4>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">
+                        Width: {selectedElementData.width || 600}px
+                      </label>
+                      <input
+                        type="range"
+                        min="200"
+                        max="800"
+                        className="w-full"
+                        value={selectedElementData.width || 600}
+                        onChange={(e) => this.updateElementProperty('width', parseInt(e.target.value))}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">
+                        Height: {selectedElementData.height || 400}px
+                      </label>
+                      <input
+                        type="range"
+                        min="150"
+                        max="600"
+                        className="w-full"
+                        value={selectedElementData.height || 400}
+                        onChange={(e) => this.updateElementProperty('height', parseInt(e.target.value))}
+                      />
+                    </div>
+                    <div>
+                      <button
+                        onClick={() => this.removeElement(this.state.selectedElement)}
+                        className="w-full px-3 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+                      >
+                        Remove Video Snapshot
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
             
@@ -1193,19 +1859,30 @@ class SceneEditor extends React.Component {
             onChange={this.handleNarrationChange}
             placeholder="Enter scene narration text..."
           />
+          
+          {/* Smart Content Enhancement */}
+          {scene.narration && scene.narration.trim() && (
+            <div className="mt-4">
+              <div className="mb-2">
+                <button
+                  onClick={this.mountSmartContentEnhancer}
+                  className="px-3 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600"
+                >
+                  🧠 Analyze Content
+                </button>
+              </div>
+              <div id="smart-content-enhancer-container"></div>
+            </div>
+          )}
         </div>
         
         <div className="mb-4">
-          <label className="block text-sm font-medium mb-1">Duration: {duration}s</label>
-          <input
-            type="range"
-            className="w-full"
-            min="1"
-            max="10"
-            step="0.1"
-            value={duration}
-            onChange={this.handleDurationChange}
-          />
+          <label className="block text-sm font-medium mb-1">
+            Duration: {this.calculateSmartDuration()}s (auto-calculated)
+          </label>
+          <div className="text-sm text-gray-600">
+            Based on content length and complexity
+          </div>
         </div>
         
         <div className="mb-4">
@@ -1306,6 +1983,9 @@ class SceneEditorModal extends React.Component {
                 onClose();
               }}
               onCancel={onClose}
+              coursePlayer={this.props.coursePlayer}
+              sectionIndex={this.props.sectionIndex}
+              sceneIndex={this.props.sceneIndex}
             />
           </div>
         </div>
@@ -1315,7 +1995,7 @@ class SceneEditorModal extends React.Component {
 }
 
 // Helper function to mount the Scene Editor Modal
-function openSceneEditor(scene, onSave) {
+function openSceneEditor(scene, onSave, options = {}) {
   const modalContainer = document.createElement('div');
   modalContainer.id = 'scene-editor-modal-container';
   document.body.appendChild(modalContainer);
@@ -1333,7 +2013,10 @@ function openSceneEditor(scene, onSave) {
       onSave: (updatedScene) => {
         onSave(updatedScene);
         closeModal();
-      }
+      },
+      coursePlayer: options.coursePlayer,
+      sectionIndex: options.sectionIndex,
+      sceneIndex: options.sceneIndex
     }),
     modalContainer
   );

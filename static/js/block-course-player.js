@@ -391,57 +391,6 @@ class BlockCoursePlayer extends React.Component {
     // Grouped rendering: show sections with their blocks underneath
     return (
       <div className="bg-white rounded-lg shadow p-4 space-y-6">
-        {this.state.role === 'author' && (
-          <div className="flex justify-end">
-            <button
-              className="px-3 py-1 bg-blue-500 text-white rounded"
-              title="Copilot: Add content from the internet"
-              onClick={async () => {
-                try {
-                  const selection = (window.getSelection && window.getSelection().toString()) || '';
-                  const defaultQuery = selection || 'Explain key points more deeply';
-                  const query = window.prompt('What would you like to add with Copilot?', defaultQuery);
-                  if (!query || !query.trim()) return;
-                  // Build lightweight course context
-                  const parts = [];
-                  (course.sections || []).forEach(s => {
-                    if (s.title) parts.push(String(s.title));
-                    (s.blocks || []).forEach(b => {
-                      if (b.content) parts.push(String(b.content));
-                      if (b.title) parts.push(String(b.title));
-                    });
-                  });
-                  const context = parts.join('\n\n').slice(0, 4000);
-                  const resp = await fetch('/augment', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query, context })
-                  });
-                  if (!resp.ok) throw new Error('Augmentation failed');
-                  const data = await resp.json();
-                  const augmentationText = data.augmentation || '';
-                  const sources = Array.isArray(data.sources) ? data.sources : [];
-                  // Build new section with augmentation
-                  const updatedCourse = JSON.parse(JSON.stringify(course));
-                  const newSection = {
-                    title: `Copilot: ${query}`,
-                    type: 'content',
-                    blocks: [
-                      { type: 'text', content: augmentationText },
-                      ...(sources.length > 0 ? [{ type: 'doc', title: sources[0].title || 'Reference', url: sources[0].url || '' }] : [])
-                    ]
-                  };
-                  updatedCourse.sections.push(newSection);
-                  if (this.props.onCourseUpdate) this.props.onCourseUpdate(updatedCourse);
-                } catch (e) {
-                  alert('Could not fetch Copilot augmentation right now.');
-                }
-              }}
-            >
-              Copilot: Add Section
-            </button>
-          </div>
-        )}
         {course.sections.length === 0 ? (
           <div className="p-6 bg-yellow-50 border border-yellow-200 rounded">
             <div className="text-yellow-800">No sections available.</div>
@@ -609,7 +558,7 @@ class DualCoursePlayer extends React.Component {
           </div>
         )}
         {view === 'scene' ? (
-          React.createElement(CoursePlayer, { course, onCourseUpdate, role: propRole })
+          React.createElement(CoursePlayer, { course, onCourseUpdate, role: propRole, videoUrl: this.props.videoUrl })
         ) : (
           React.createElement(BlockCoursePlayer, { course, onCourseUpdate, role })
         )}
@@ -626,7 +575,8 @@ function mountDualCoursePlayer(courseData, containerId, onCourseUpdate, options)
         course: courseData,
         onCourseUpdate,
         role: options && options.role ? options.role : 'learner',
-        initialView: options && options.view ? options.view : 'scene'
+        initialView: options && options.view ? options.view : 'scene',
+        videoUrl: options && options.videoUrl ? options.videoUrl : null
       }),
       container
     );
